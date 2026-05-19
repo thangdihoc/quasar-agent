@@ -1,0 +1,14 @@
+{
+  "name": "@quasar/telegram",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@quasar/core": "workspace:*",
+    "@quasar/agent": "workspace:*",
+    "@quasar/memory": "workspace:*",
+    "@quasar/security": "workspace:*",
+    "grammy": "^1.35.0"
+  }
+}

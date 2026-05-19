@@ -1,0 +1,17 @@
+{
+  "name": "@quasar/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": { "quasar": "src/index.ts" },
+  "dependencies": {
+    "@quasar/core": "workspace:*",
+    "@quasar/agent": "workspace:*",
+    "@quasar/memory": "workspace:*",
+    "@quasar/security": "workspace:*",
+    "@quasar/telegram": "workspace:*",
+    "@quasar/tools": "workspace:*",
+    "dotenv": "^16.4.7"
+  }
+}

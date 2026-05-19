@@ -1,0 +1,20 @@
+{
+  "name": "quasar-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx packages/cli/src/index.ts start",
+    "init:config": "tsx packages/cli/src/index.ts setup",
+    "model": "tsx packages/cli/src/index.ts model",
+    "dev": "tsx watch packages/cli/src/index.ts start",
+    "typecheck": "tsc --noEmit",
+    "doctor": "tsx scripts/doctor.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0",
+    "@types/better-sqlite3": "^7.6.12"
+  }
+}

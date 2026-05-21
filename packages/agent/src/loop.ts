@@ -3,7 +3,7 @@
 
 import type { QuasarConfig, SessionMessage, ToolDef, SessionId } from '@quasar/core'
 import { createLogger, eventBus, traceContext } from '@quasar/core'
-import { SqliteMemory } from '@quasar/memory'
+import { SqliteMemory, LanceDBMemory } from '@quasar/memory'
 import { createProvider, detectProvider, stripModelPrefix, type IProvider } from './providers/index.js'
 import { buildSystemPrompt } from './prompt.js'
 import { buildContextWindow, estimateTokens, truncateToolOutput } from './context.js'
@@ -16,14 +16,16 @@ const MAX_CONTEXT_TOKENS = 120_000 // ~120k token window default
 export class AgentLoop {
   private config: QuasarConfig
   private memory: SqliteMemory
+  private vectorMemory?: LanceDBMemory
   private providerCache = new Map<string, IProvider>()
   private toolDefs: ToolDef[] = []
   private toolHandlers = new Map<string, (args: Record<string, unknown>) => Promise<string>>()
   private currentModel: string
 
-  constructor(config: QuasarConfig, memory: SqliteMemory) {
+  constructor(config: QuasarConfig, memory: SqliteMemory, vectorMemory?: LanceDBMemory) {
     this.config = config
     this.memory = memory
+    this.vectorMemory = vectorMemory
     this.currentModel = config.agent.model
     log.info(`Agent loop initialized with model: ${this.currentModel}`)
   }
@@ -93,7 +95,23 @@ export class AgentLoop {
     })
 
     const provider = this.getProvider()
-    const systemPrompt = buildSystemPrompt(this.config)
+    let systemPrompt = buildSystemPrompt(this.config)
+
+    // LanceDB RAG Search
+    if (this.vectorMemory) {
+      try {
+        const memories = await this.vectorMemory.search(userMessage, 3)
+        if (memories.length > 0) {
+          const contextAddition = '\n\n[Trí nhớ dài hạn tìm thấy (RAG)]:\n' +
+            memories.map((m, i) => `- ${m.text}`).join('\n')
+          systemPrompt += contextAddition
+          log.info(`Found ${memories.length} relevant memories, appended to system prompt`)
+        }
+      } catch (e) {
+        log.error('RAG memory search failed:', e)
+      }
+    }
+
     const systemPromptTokens = estimateTokens(systemPrompt)
     const modelName = stripModelPrefix(this.currentModel)
     let rounds = 0

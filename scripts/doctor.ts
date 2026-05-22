@@ -1,10 +1,27 @@
 // scripts/doctor.ts — Health check script
 
 import { createLogger } from '@quasar/core'
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { resolve } from 'path'
 
 const log = createLogger('doctor')
+
+// Load .env manually
+const envPath = resolve('.env')
+const envVars: Record<string, string> = {}
+if (existsSync(envPath)) {
+  const content = readFileSync(envPath, 'utf8')
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const idx = trimmed.indexOf('=')
+    if (idx !== -1) {
+      const k = trimmed.substring(0, idx).trim()
+      const v = trimmed.substring(idx + 1).trim()
+      envVars[k] = v
+    }
+  }
+}
 
 interface Check {
   name: string
@@ -35,7 +52,7 @@ async function runChecks(): Promise<Check[]> {
   // 3. Environment variables
   const vars = ['TELEGRAM_BOT_TOKEN', 'OPENAI_API_KEY']
   for (const v of vars) {
-    const value = process.env[v]
+    const value = process.env[v] || envVars[v]
     checks.push({
       name: v,
       status: value ? 'pass' : v === 'TELEGRAM_BOT_TOKEN' ? 'fail' : 'warn',

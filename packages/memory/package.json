@@ -5,6 +5,7 @@
   "type": "module",
   "main": "src/index.ts",
   "dependencies": {
+    "@lancedb/lancedb": "^0.29.0",
     "@quasar/core": "workspace:*",
     "better-sqlite3": "^11.7.0"
   }

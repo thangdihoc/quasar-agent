@@ -20,7 +20,20 @@ export class GoogleProvider {
 
     for (const msg of messages) {
       if (msg.role === 'user') {
-        result.push({ role: 'user', parts: [{ text: msg.content }] })
+        const parts: Part[] = []
+        if (msg.content) parts.push({ text: msg.content })
+        if (msg.images) {
+          for (const img of msg.images) {
+            const [prefix, base64] = img.split(',')
+            const mimeType = prefix?.split(':')[1]?.split(';')[0]
+            if (mimeType && base64) {
+              parts.push({
+                inlineData: { mimeType, data: base64 }
+              })
+            }
+          }
+        }
+        if (parts.length > 0) result.push({ role: 'user', parts })
       } else if (msg.role === 'assistant') {
         const parts: Part[] = []
         if (msg.content) parts.push({ text: msg.content })

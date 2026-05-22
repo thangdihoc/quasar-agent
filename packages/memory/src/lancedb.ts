@@ -11,6 +11,7 @@ export interface VectorDocument {
   text: string
   metadata: Record<string, unknown>
   vector?: number[]
+  score?: number
 }
 
 export class LanceDBMemory {
@@ -68,6 +69,7 @@ export class LanceDBMemory {
         id: r.id as string,
         text: r.text as string,
         metadata: JSON.parse((r.metadata as string) || '{}'),
+        score: r._distance as number | undefined
       }))
     } catch (e) {
       log.error('Search failed:', e)

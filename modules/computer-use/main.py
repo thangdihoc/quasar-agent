@@ -30,6 +30,8 @@ class TaskRequest(BaseModel):
     task: str
     max_steps: int = 20
     api_key: str | None = None
+    google_api_key: str | None = None
+    openrouter_api_key: str | None = None
 
 
 class TaskResponse(BaseModel):
@@ -137,6 +139,103 @@ async def action(req: ActionRequest):
     return {"result": result}
 
 
+def call_gemini_api(system_prompt: str, task: str, step: int, b64_image: str, api_key: str) -> str:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": f"Task: {task}\nStep {step}. What action should I take?"
+                    },
+                    {
+                        "inlineData": {
+                            "mimeType": "image/jpeg",
+                            "data": b64_image
+                        }
+                    }
+                ]
+            }
+        ],
+        "systemInstruction": {
+            "parts": [
+                {
+                    "text": system_prompt
+                }
+            ]
+        },
+        "generationConfig": {
+            "responseMimeType": "application/json"
+        }
+    }
+    import urllib.request
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    with urllib.request.urlopen(req) as response:
+        res_body = response.read()
+        res_data = json.loads(res_body.decode("utf-8"))
+        try:
+            return res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except (KeyError, IndexError) as e:
+            log.error(f"Failed to parse Gemini response: {res_data}")
+            raise Exception("Invalid response structure from Gemini API")
+
+
+def call_openrouter_api(system_prompt: str, task: str, step: int, b64_image: str, api_key: str) -> str:
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    payload = {
+        "model": "google/gemini-2.5-flash",
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Task: {task}\nStep {step}. What action should I take?"
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "response_format": {
+            "type": "json_object"
+        }
+    }
+    import urllib.request
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "https://github.com/quasar-agent/quasar",
+            "X-Title": "Quasar Agent"
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req) as response:
+        res_body = response.read()
+        res_data = json.loads(res_body.decode("utf-8"))
+        try:
+            return res_data["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError) as e:
+            log.error(f"Failed to parse OpenRouter response: {res_data}")
+            raise Exception("Invalid response structure from OpenRouter API")
+
+
 @app.post("/execute")
 async def execute_task(req: TaskRequest):
     """
@@ -148,11 +247,29 @@ async def execute_task(req: TaskRequest):
     5. Repeat until done or max_steps
     """
     import os
-    api_key = req.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="ANTHROPIC_API_KEY required")
+    anthropic_key = req.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    google_key = req.google_api_key or os.environ.get("GOOGLE_API_KEY", "")
+    openrouter_key = req.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = None
+    provider = None
+
+    if anthropic_key:
+        client = anthropic.Anthropic(api_key=anthropic_key)
+        provider = "anthropic"
+        log.info("Using Anthropic (Claude) for computer use task")
+    elif google_key:
+        provider = "google"
+        log.info("Using Google Gemini for computer use task")
+    elif openrouter_key:
+        provider = "openrouter"
+        log.info("Using OpenRouter for computer use task")
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="No API key available. Please configure ANTHROPIC_API_KEY, GOOGLE_API_KEY, or OPENROUTER_API_KEY"
+        )
+
     screenshots: list[str] = []
     steps = 0
 
@@ -179,24 +296,31 @@ Respond ONLY with the JSON action object, no explanation."""
             b64 = take_screenshot()
             screenshots.append(b64)
 
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=500,
-                system=system_prompt,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": f"Task: {req.task}\nStep {steps}. What action should I take?"},
-                        {"type": "image", "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": b64
-                        }}
-                    ]
-                }]
-            )
+            if provider == "anthropic":
+                response = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=500,
+                    system=system_prompt,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": f"Task: {req.task}\nStep {steps}. What action should I take?"},
+                            {"type": "image", "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": b64
+                            }}
+                        ]
+                    }]
+                )
+                action_text = response.content[0].text.strip()
+            elif provider == "google":
+                action_text = call_gemini_api(system_prompt, req.task, steps, b64, google_key)
+            elif provider == "openrouter":
+                action_text = call_openrouter_api(system_prompt, req.task, steps, b64, openrouter_key)
+            else:
+                raise Exception("Unknown provider config")
 
-            action_text = response.content[0].text.strip()
             log.info(f"Step {steps}: {action_text}")
 
             try:

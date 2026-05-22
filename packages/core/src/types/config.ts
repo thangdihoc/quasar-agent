@@ -46,6 +46,10 @@ export interface ComputerUseConfig {
   pythonPort: number
 }
 
+export interface WebConfig {
+  apiKey?: string
+}
+
 export interface QuasarConfig {
   gateway: GatewayConfig
   agent: AgentCoreConfig
@@ -55,4 +59,5 @@ export interface QuasarConfig {
   memory: MemoryConfig
   mcp?: { servers: McpServerConfig[] }
   computerUse?: ComputerUseConfig
+  web?: WebConfig
 }

@@ -1,26 +1,33 @@
 // packages/cli/src/index.ts — Entry point
 
 import 'dotenv/config'
-import { createLogger, enableTraceLog, eventBus } from '@quasar/core'
+import { createLogger, enableTraceLog, eventBus, loadConfigFile } from '@quasar/core'
 import type { QuasarConfig } from '@quasar/core'
-import { SqliteMemory } from '@quasar/memory'
+import { SqliteMemory, LanceDBMemory } from '@quasar/memory'
 import { AllowlistManager } from '@quasar/security'
 import { QuasarBot } from '@quasar/telegram'
 import { AgentLoop } from '@quasar/agent'
-import { registerAllTools } from '@quasar/tools'
+import { registerAllTools, loadPlugins, registerPlugins } from '@quasar/tools'
+import { createWebServer } from '@quasar/web'
+import { McpClientManager } from '@quasar/mcp'
+import { CronScheduler } from '@quasar/scheduler'
+import { loadSkills, skillsToPrompt } from '@quasar/skills'
+import { ImageService, TTSService } from '@quasar/media'
 import { mkdir } from 'fs/promises'
 import { resolve } from 'path'
+import { spawn } from 'child_process'
+import OpenAI from 'openai'
 
 const log = createLogger('cli')
 
 const BANNER = `
   ██████╗ ██╗   ██╗ █████╗ ███████╗ █████╗ ██████╗
  ██╔═══██╗██║   ██║██╔══██╗██╔════╝██╔══██╗██╔══██╗
- ██║   ██║██║   ██║███████║███████╗███████║██████╔╝
+ ██║   ██║██║   ██║███████║███████║███████║██████╔╝
  ██║▄▄ ██║██║   ██║██╔══██║╚════██║██╔══██║██╔══██╗
  ╚██████╔╝╚██████╔╝██║  ██║███████║██║  ██║██║  ██║
   ╚══▀▀═╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
-  Personal AI Agent v0.1.0
+   Personal AI Agent v0.3.0
 `
 
 // Default config — override with quasar.config.ts
@@ -51,20 +58,69 @@ function getConfig(): QuasarConfig {
       },
     },
     tools: {
-      allow: ['exec', 'file_read', 'file_write', 'file_edit', 'file_list', 'web_fetch', 'web_search', 'pdf_read'],
+      allow: [
+        'exec',
+        'file_read',
+        'file_write',
+        'file_edit',
+        'file_list',
+        'web_fetch',
+        'web_search',
+        'web_browser',
+        'pdf_read',
+        'generate_image',
+        'text_to_speech',
+        'schedule_task',
+        'cancel_task',
+        'computer_use',
+        'remember_info',
+        'search_memories',
+        'create_plan',
+        'update_plan',
+        'get_plan',
+        'run_code',
+        'define_workflow',
+        'run_workflow',
+        'list_workflows',
+        'render_mermaid',
+        'render_code_image',
+        'knowledge_index_file',
+        'knowledge_index_folder',
+        'knowledge_search',
+        'knowledge_stats',
+        'delegate_task',
+        'list_agents'
+      ],
       deny: [],
       execRequiresApproval: true,
+    },
+    web: {
+      apiKey: process.env.WEB_API_KEY || '',
     },
     memory: {
       sqlitePath: resolve('./data/memory.db'),
       lancedbPath: resolve('./data/vectors'),
+    },
+    computerUse: {
+      enabled: process.env.COMPUTER_USE_ENABLED === 'true' || true,
+      pythonPort: 18790,
+    },
+    mcp: {
+      servers: [],
     },
   }
 }
 
 async function start() {
   console.log(BANNER)
-  const config = getConfig()
+  let config = getConfig()
+
+  // Load config file if exists (#11)
+  try {
+    config = await loadConfigFile(config)
+  } catch (e) {
+    log.warn('Config file loading failed, using defaults:', e)
+  }
 
   // Validate
   if (!config.telegram.token) {
@@ -80,14 +136,82 @@ async function start() {
   eventBus.on('agent:start', (e) => log.info(`[event] Agent started: ${e.type}`))
   eventBus.on('agent:error', (e) => log.error(`[event] Agent error: ${(e as any).error}`))
   eventBus.on('model:switch', (e) => log.info(`[event] Model: ${(e as any).from} → ${(e as any).to}`))
+  eventBus.on('token:usage', (e) => {
+    const ev = e as any
+    log.info(`[event] Tokens: +${ev.totalTokens} (prompt: ${ev.promptTokens}, completion: ${ev.completionTokens}) [${ev.model}]`)
+  })
 
-  // Init components
+  // Load skills
+  const skills = await loadSkills('./skills')
+  const skillsPrompt = skillsToPrompt(skills)
+  if (skillsPrompt) {
+    config.agent.systemPrompt = (config.agent.systemPrompt || '') + skillsPrompt
+  }
+
+  // Init SQLite memory & Allowlist
   const memory = new SqliteMemory(config.memory.sqlitePath)
   const allowlist = new AllowlistManager(config.telegram.allowedUsers)
-  const agentLoop = new AgentLoop(config, memory)
+
+  // Init LanceDB memory if OpenAI key is present
+  let vectorMemory: LanceDBMemory | undefined
+  const openAiApiKey = config.providers.openai?.apiKey
+  if (openAiApiKey) {
+    const openaiClient = new OpenAI({ apiKey: openAiApiKey })
+    vectorMemory = new LanceDBMemory(config.memory.lancedbPath, async (text) => {
+      const res = await openaiClient.embeddings.create({
+        model: 'text-embedding-3-small',
+        input: text,
+      })
+      return res.data[0]!.embedding
+    })
+    try {
+      await vectorMemory.init()
+    } catch (e) {
+      log.error('Failed to initialize LanceDB memory:', e)
+      vectorMemory = undefined
+    }
+  } else {
+    log.warn('OPENAI_API_KEY is not set. LanceDB memory (RAG) is disabled.')
+  }
+
+  // Init Agent loop (with vectorMemory)
+  const agentLoop = new AgentLoop(config, memory, vectorMemory)
+
+  // Init services
+  const imageService = openAiApiKey ? new ImageService(openAiApiKey) : undefined
+  const ttsService = openAiApiKey ? new TTSService(openAiApiKey) : undefined
+  const cronScheduler = new CronScheduler()
 
   // Init Telegram bot
   const bot = new QuasarBot(config, agentLoop, memory, allowlist)
+
+  // Task trigger handler
+  const handleTaskTrigger = async (id: string, prompt: string, description: string) => {
+    log.info(`Task triggered: ${id} - ${description}`)
+    const userId = config.telegram.allowedUsers[0]
+    if (!userId) {
+      log.warn('No allowed users configured to receive task notifications')
+      return
+    }
+
+    try {
+      await bot.sendMessage(
+        userId,
+        `🔔 *Scheduled Task Triggered:* _${description}_ (ID: \`${id}\`)\nRunning agent prompt: "${prompt}"...`
+      )
+      const result = await agentLoop.process(`task-${id}-${Date.now()}`, prompt)
+      await bot.sendMessage(
+        userId,
+        `📊 *Task Result [${id}]:*\n\n${result}`
+      )
+    } catch (err) {
+      log.error(`Task ${id} execution failed:`, err)
+      await bot.sendMessage(
+        userId,
+        `❌ *Task Failed [${id}]:*\nError: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
 
   // Register tools with approval callback
   registerAllTools({
@@ -101,20 +225,105 @@ async function start() {
           if (userId) await bot.sendApprovalRequest(userId, id, command)
         }
       : undefined,
+    imageService,
+    ttsService,
+    cronScheduler,
+    vectorMemory,
+    onTaskTrigger: handleTaskTrigger,
   })
+
+  // Init MCP Client Manager and connect to MCP servers
+  const mcpManager = new McpClientManager()
+  if (config.mcp?.servers) {
+    for (const serverConfig of config.mcp.servers) {
+      try {
+        const tools = await mcpManager.connect(serverConfig)
+        for (const tool of tools) {
+          agentLoop.registerTool(tool, async (args) => {
+            return await mcpManager.callTool(serverConfig.name, tool.name, args)
+          })
+        }
+      } catch (err) {
+        log.error(`Failed to connect MCP server ${serverConfig.name}:`, err)
+      }
+    }
+  }
+
+  // Spawn Python Computer Use service if enabled
+  let pythonProcess: any = null
+  if (config.computerUse?.enabled) {
+    const pythonPort = config.computerUse.pythonPort || 18790
+    log.info(`Starting Python Computer Use service on port ${pythonPort}...`)
+    const pyCmd = process.platform === 'win32' ? 'python' : 'python3'
+    pythonProcess = spawn(pyCmd, ['modules/computer-use/main.py'], {
+      stdio: 'inherit',
+      env: { ...process.env, PORT: String(pythonPort) }
+    })
+
+    pythonProcess.on('error', (err: any) => {
+      log.error('Failed to start Python computer-use service:', err)
+    })
+  }
+
+  // Load plugins (#12)
+  try {
+    const plugins = await loadPlugins('./plugins')
+    registerPlugins(agentLoop, plugins)
+    if (plugins.length > 0) {
+      log.info(`Registered ${plugins.length} plugins`)
+    }
+  } catch (e) {
+    log.warn('Plugin loading failed:', e)
+  }
+
+  // Start Express WebChat UI (with auth #10)
+  try {
+    const webApiKey = (config as any).web?.apiKey || undefined
+    createWebServer(agentLoop, memory, config.gateway.port, config.gateway.host, webApiKey)
+  } catch (err) {
+    log.error('Failed to start WebChat server:', err)
+  }
 
   // Graceful shutdown
   const shutdown = async () => {
     log.info('Shutting down...')
-    await bot.stop()
-    memory.close()
+    
+    // Stop Telegram bot
+    try {
+      await bot.stop()
+    } catch { /* ignore */ }
+
+    // Stop all cron tasks
+    try {
+      cronScheduler.stopAll()
+    } catch { /* ignore */ }
+
+    // Disconnect MCP servers
+    try {
+      await mcpManager.disconnectAll()
+    } catch { /* ignore */ }
+
+    // Terminate Python Computer Use service
+    if (pythonProcess) {
+      log.info('Stopping Python computer-use service...')
+      try {
+        pythonProcess.kill()
+      } catch { /* ignore */ }
+    }
+
+    // Close SQLite memory
+    try {
+      memory.close()
+    } catch { /* ignore */ }
+
+    log.info('Shutdown complete.')
     process.exit(0)
   }
 
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
 
-  // Start
+  // Start Telegram bot
   log.info(`Model: ${config.agent.model}`)
   log.info(`Tools: ${agentLoop.getToolDefs().map(t => t.name).join(', ')}`)
   await bot.start()

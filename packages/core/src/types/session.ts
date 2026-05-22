@@ -6,6 +6,7 @@ export type MessageRole = 'user' | 'assistant' | 'tool'
 export interface SessionMessage {
   role: MessageRole
   content: string
+  images?: string[]
   toolCalls?: Array<{ id: string; name: string; arguments: string }>
   toolCallId?: string
   timestamp: number

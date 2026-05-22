@@ -20,7 +20,25 @@ export class AnthropicProvider {
 
     for (const msg of messages) {
       if (msg.role === 'user') {
-        result.push({ role: 'user', content: msg.content })
+        if (msg.images && msg.images.length > 0) {
+          const content: Anthropic.ContentBlockParam[] = []
+          if (msg.content) {
+            content.push({ type: 'text', text: msg.content })
+          }
+          for (const img of msg.images) {
+            const [prefix, base64] = img.split(',')
+            const media_type = prefix?.split(':')[1]?.split(';')[0] as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+            if (media_type && base64) {
+              content.push({
+                type: 'image',
+                source: { type: 'base64', media_type, data: base64 }
+              })
+            }
+          }
+          result.push({ role: 'user', content: content.length > 0 ? content : msg.content })
+        } else {
+          result.push({ role: 'user', content: msg.content })
+        }
       } else if (msg.role === 'assistant') {
         const content: Anthropic.ContentBlockParam[] = []
         if (msg.content) {

@@ -9,6 +9,8 @@
     "@quasar/agent": "workspace:*",
     "@quasar/memory": "workspace:*",
     "@quasar/security": "workspace:*",
-    "grammy": "^1.35.0"
+    "@quasar/media": "workspace:*",
+    "grammy": "^1.35.0",
+    "openai": "^4.104.0"
   }
 }

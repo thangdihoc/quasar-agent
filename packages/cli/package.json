@@ -12,6 +12,13 @@
     "@quasar/security": "workspace:*",
     "@quasar/telegram": "workspace:*",
     "@quasar/tools": "workspace:*",
-    "dotenv": "^16.4.7"
+    "@quasar/web": "workspace:*",
+    "@quasar/mcp": "workspace:*",
+    "@quasar/media": "workspace:*",
+    "@quasar/scheduler": "workspace:*",
+    "@quasar/skills": "workspace:*",
+    "@quasar/native": "workspace:*",
+    "dotenv": "^16.4.7",
+    "openai": "^4.104.0"
   }
 }

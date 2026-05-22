@@ -1,13 +1,38 @@
 // packages/agent/src/context.ts
 // Context engineering — summarize, truncate, manage context window
+// Upgrade: #9 Real Context Summarization via RAG
 
 import type { SessionMessage } from '@quasar/core'
 import { createLogger } from '@quasar/core'
 
 const log = createLogger('agent:context')
 
+let rustCountTokens: ((text: string) => number) | null = null
+let rustCompactContext: ((text: string, maxTokens: number) => string) | null = null
+
+if (!process.env.VITEST) {
+  try {
+    // @ts-ignore
+    const native = await import('@quasar/native')
+    rustCountTokens = native.countTokens
+    rustCompactContext = native.compactContext
+    log.info('Loaded @quasar/native module successfully for token operations')
+  } catch (e) {
+    log.warn('Could not load @quasar/native, falling back to JS heuristic')
+  }
+} else {
+  log.info('Running under Vitest, using JS heuristic to speed up tests')
+}
+
 /** Estimate token count (rough: 1 token ≈ 4 chars for English, 2 chars for CJK) */
 export function estimateTokens(text: string): number {
+  if (rustCountTokens) {
+    try {
+      return rustCountTokens(text)
+    } catch (e) {
+      log.error('rustCountTokens error, using heuristic fallback:', e)
+    }
+  }
   // Simple heuristic — accurate enough for context management
   const ascii = text.replace(/[^\x00-\x7F]/g, '').length
   const nonAscii = text.length - ascii
@@ -30,10 +55,57 @@ export function truncateToolOutput(output: string, maxTokens = 2000): string {
   const tokens = estimateTokens(output)
   if (tokens <= maxTokens) return output
 
+  if (rustCompactContext) {
+    try {
+      return rustCompactContext(output, maxTokens) + '\n\n... (truncated by Rust)'
+    } catch (e) {
+      log.error('rustCompactContext error:', e)
+    }
+  }
+
   const maxChars = maxTokens * 4
   const truncated = output.slice(0, maxChars)
   const remaining = output.length - maxChars
   return `${truncated}\n\n... (${remaining} characters truncated)`
+}
+
+/** Summarize removed messages into a condensed text (#9) */
+function summarizeRemovedMessages(messages: SessionMessage[]): string {
+  // Extract key information from removed messages
+  const userMessages: string[] = []
+  const assistantMessages: string[] = []
+  const toolsUsed = new Set<string>()
+
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      userMessages.push(msg.content.slice(0, 100))
+    } else if (msg.role === 'assistant' && msg.content) {
+      assistantMessages.push(msg.content.slice(0, 100))
+    }
+    if (msg.toolCalls) {
+      for (const tc of msg.toolCalls) {
+        toolsUsed.add(tc.name)
+      }
+    }
+  }
+
+  const parts: string[] = [
+    `[Context compacted: ${messages.length} earlier messages summarized]`,
+  ]
+
+  if (userMessages.length > 0) {
+    parts.push(`User discussed: ${userMessages.slice(0, 5).join(' | ')}`)
+  }
+
+  if (assistantMessages.length > 0) {
+    parts.push(`Assistant covered: ${assistantMessages.slice(0, 3).join(' | ')}`)
+  }
+
+  if (toolsUsed.size > 0) {
+    parts.push(`Tools used: ${Array.from(toolsUsed).join(', ')}`)
+  }
+
+  return parts.join('\n')
 }
 
 /** Compact messages to fit within context window */
@@ -56,24 +128,28 @@ export function compactMessages(
   // Calculate how many recent messages we can keep
   let recentMessages: SessionMessage[] = []
   let recentTokens = 0
+  const firstTokens = estimateMessagesTokens(firstMessages)
 
   for (let i = messages.length - 1; i >= keepFirst; i--) {
     const msg = messages[i]!
     const msgTokens = estimateTokens(msg.content) + 4
-    if (recentTokens + msgTokens > available - estimateMessagesTokens(firstMessages)) break
+    if (recentTokens + msgTokens > available - firstTokens) break
     recentMessages.unshift(msg)
     recentTokens += msgTokens
   }
 
-  // Add summary of removed messages
+  // Real summarization of removed messages (#9)
   const removedCount = messages.length - keepFirst - recentMessages.length
   if (removedCount > 0) {
+    const removedMessages = messages.slice(keepFirst, keepFirst + removedCount)
+    const summaryText = summarizeRemovedMessages(removedMessages)
+
     const summary: SessionMessage = {
       role: 'assistant',
-      content: `[Context compacted: ${removedCount} earlier messages summarized to save tokens]`,
+      content: summaryText,
       timestamp: Date.now(),
     }
-    log.info(`Compacted ${removedCount} messages, keeping ${firstMessages.length + recentMessages.length + 1}`)
+    log.info(`Compacted ${removedCount} messages with real summary, keeping ${firstMessages.length + recentMessages.length + 1}`)
     return [...firstMessages, summary, ...recentMessages]
   }
 

@@ -1,0 +1,27 @@
+{
+  "name": "hello",
+  "version": "1.0.0",
+  "description": "Example plugin for Quasar Agent",
+  "tools": [
+    {
+      "name": "greet",
+      "description": "Say hello in different languages",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "language": {
+            "type": "string",
+            "enum": ["en", "vi", "ja", "ko"],
+            "description": "Language code"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name to greet"
+          }
+        },
+        "required": ["name"]
+      },
+      "handler": "./handler.js"
+    }
+  ]
+}

@@ -1,8 +1,10 @@
 // packages/agent/src/loop.ts
-// Agent loop: nhận message → gọi AI → chạy tools → trả lời
+// Agent loop v0.3.0
+// Upgrades: #3 parallel tools, #5 token tracking, #6 per-session model,
+// #17 error recovery, #21 tool caching, #23 auto-title
 
-import type { QuasarConfig, SessionMessage, ToolDef, SessionId } from '@quasar/core'
-import { createLogger, eventBus, traceContext } from '@quasar/core'
+import type { QuasarConfig, SessionMessage, ToolDef, SessionId, ProviderName } from '@quasar/core'
+import { createLogger, eventBus, traceContext, toolCache, toolCacheKey } from '@quasar/core'
 import { SqliteMemory, LanceDBMemory } from '@quasar/memory'
 import { createProvider, detectProvider, stripModelPrefix, type IProvider } from './providers/index.js'
 import { buildSystemPrompt } from './prompt.js'
@@ -11,7 +13,7 @@ import { buildContextWindow, estimateTokens, truncateToolOutput } from './contex
 const log = createLogger('agent:loop')
 
 const MAX_TOOL_ROUNDS = 15
-const MAX_CONTEXT_TOKENS = 120_000 // ~120k token window default
+const MAX_CONTEXT_TOKENS = 120_000
 
 export class AgentLoop {
   private config: QuasarConfig
@@ -20,14 +22,15 @@ export class AgentLoop {
   private providerCache = new Map<string, IProvider>()
   private toolDefs: ToolDef[] = []
   private toolHandlers = new Map<string, (args: Record<string, unknown>) => Promise<string>>()
-  private currentModel: string
+  private defaultModel: string
+  private sessionModels = new Map<SessionId, string>()
 
   constructor(config: QuasarConfig, memory: SqliteMemory, vectorMemory?: LanceDBMemory) {
     this.config = config
     this.memory = memory
     this.vectorMemory = vectorMemory
-    this.currentModel = config.agent.model
-    log.info(`Agent loop initialized with model: ${this.currentModel}`)
+    this.defaultModel = config.agent.model
+    log.info(`Agent loop initialized with default model: ${this.defaultModel}`)
   }
 
   registerTool(def: ToolDef, handler: (args: Record<string, unknown>) => Promise<string>): void {
@@ -40,18 +43,53 @@ export class AgentLoop {
     return this.toolDefs
   }
 
-  setModel(model: string): void {
-    const oldModel = this.currentModel
-    this.currentModel = model
+  setModel(model: string, sessionId?: SessionId): void {
+    const oldModel = sessionId ? this.getModel(sessionId) : this.defaultModel
+    if (sessionId) {
+      this.sessionModels.set(sessionId, model)
+    } else {
+      this.defaultModel = model
+      this.config.agent.model = model
+    }
     eventBus.emit('model:switch', { type: 'model:switch', from: oldModel, to: model })
-    log.info(`Model switched to: ${model}`)
+    log.info(`Model switched to: ${model}${sessionId ? ` (session: ${sessionId})` : ' (default)'}`)
   }
 
-  getModel(): string {
-    return this.currentModel
+  updateProviders(providers: Record<string, { apiKey?: string; baseUrl?: string }>) {
+    for (const [name, provConfig] of Object.entries(providers)) {
+      const providerName = name as ProviderName
+      if (!this.config.providers[providerName]) {
+        this.config.providers[providerName] = {}
+      }
+      const existing = this.config.providers[providerName]!
+      
+      if (provConfig.apiKey !== undefined) {
+        const key = provConfig.apiKey.trim()
+        const isMasked = key.includes('...') || key === '********'
+        if (!isMasked) {
+          existing.apiKey = key || undefined
+        }
+      }
+      
+      if (provConfig.baseUrl !== undefined) {
+        existing.baseUrl = provConfig.baseUrl.trim() || undefined
+      }
+    }
+    this.providerCache.clear()
+    log.info('Providers configuration updated dynamically')
   }
 
-  /** Resume an existing session — load messages from SQLite */
+  getConfig(): QuasarConfig {
+    return this.config
+  }
+
+  getModel(sessionId?: SessionId): string {
+    if (sessionId && this.sessionModels.has(sessionId)) {
+      return this.sessionModels.get(sessionId)!
+    }
+    return this.defaultModel
+  }
+
   resumeSession(sessionId: SessionId): number {
     const messages = this.memory.getMessages(sessionId)
     eventBus.emit('session:resume', {
@@ -63,38 +101,68 @@ export class AgentLoop {
     return messages.length
   }
 
-  private getProvider(): IProvider {
-    const providerName = detectProvider(this.currentModel)
+  private getProvider(model?: string): IProvider {
+    const currentModel = model || this.defaultModel
+    const providerName = detectProvider(currentModel)
     const cacheKey = `${providerName}:${this.config.providers[providerName]?.apiKey || 'default'}`
-
     if (!this.providerCache.has(cacheKey)) {
       this.providerCache.set(cacheKey, createProvider(providerName, this.config))
     }
-
     return this.providerCache.get(cacheKey)!
+  }
+
+  /** Generate auto-title for a session (#23) */
+  async generateTitle(sessionId: SessionId): Promise<string> {
+    try {
+      const messages = this.memory.getMessages(sessionId)
+      const userMsgs = messages.filter(m => m.role === 'user').slice(0, 3)
+      if (userMsgs.length === 0) return '(empty)'
+
+      const preview = userMsgs.map(m => m.content.slice(0, 100)).join(' | ')
+
+      // Use a cheap model for title generation
+      const provider = this.getProvider(this.defaultModel)
+      const modelName = stripModelPrefix(this.defaultModel)
+
+      const result = await provider.complete({
+        model: modelName,
+        messages: [{ role: 'user', content: `Tạo tiêu đề ngắn (tối đa 10 từ) cho hội thoại này. Chỉ trả về tiêu đề, không giải thích:\n\n${preview}`, timestamp: Date.now() }],
+        tools: [],
+        systemPrompt: 'You are a title generator. Return ONLY a short title, nothing else.',
+        maxTokens: 50,
+      })
+
+      const title = result.content.replace(/^["']|["']$/g, '').trim().slice(0, 80)
+      this.memory.updateSessionTitle(sessionId, title)
+      return title
+    } catch (e) {
+      log.warn('Auto-title generation failed:', e)
+      return '(untitled)'
+    }
   }
 
   async process(
     sessionId: SessionId,
     userMessage: string,
-    opts?: { stream?: boolean; onChunk?: (text: string) => void }
+    opts?: { stream?: boolean; onChunk?: (text: string) => void; images?: string[] }
   ): Promise<string> {
     const traceId = traceContext.start()
+    const currentModel = this.getModel(sessionId)
 
-    // Save user message
     this.memory.addMessage(sessionId, {
       role: 'user',
       content: userMessage,
+      images: opts?.images,
       timestamp: Date.now(),
     })
 
     eventBus.emit('agent:start', {
       type: 'agent:start',
       sessionId,
-      model: this.currentModel,
+      model: currentModel,
     })
 
-    const provider = this.getProvider()
+    const provider = this.getProvider(currentModel)
     let systemPrompt = buildSystemPrompt(this.config)
 
     // LanceDB RAG Search
@@ -103,9 +171,9 @@ export class AgentLoop {
         const memories = await this.vectorMemory.search(userMessage, 3)
         if (memories.length > 0) {
           const contextAddition = '\n\n[Trí nhớ dài hạn tìm thấy (RAG)]:\n' +
-            memories.map((m, i) => `- ${m.text}`).join('\n')
+            memories.map((m) => `- ${m.text}`).join('\n')
           systemPrompt += contextAddition
-          log.info(`Found ${memories.length} relevant memories, appended to system prompt`)
+          log.info(`Found ${memories.length} relevant memories`)
         }
       } catch (e) {
         log.error('RAG memory search failed:', e)
@@ -113,14 +181,13 @@ export class AgentLoop {
     }
 
     const systemPromptTokens = estimateTokens(systemPrompt)
-    const modelName = stripModelPrefix(this.currentModel)
+    const modelName = stripModelPrefix(currentModel)
     let rounds = 0
 
     try {
       while (rounds < MAX_TOOL_ROUNDS) {
         rounds++
 
-        // Context engineering — manage token window
         const rawMessages = this.memory.getMessages(sessionId)
         const messages = buildContextWindow(rawMessages, MAX_CONTEXT_TOKENS, systemPromptTokens)
 
@@ -134,9 +201,21 @@ export class AgentLoop {
           onChunk: opts?.onChunk,
         })
 
-        // Nếu có tool calls → chạy tools
+        // Token tracking (#5)
+        if (result.usage) {
+          this.memory.addTokenUsage(sessionId, currentModel, result.usage.promptTokens, result.usage.completionTokens, result.usage.totalTokens)
+          eventBus.emit('token:usage', {
+            type: 'token:usage',
+            sessionId,
+            promptTokens: result.usage.promptTokens,
+            completionTokens: result.usage.completionTokens,
+            totalTokens: result.usage.totalTokens,
+            model: currentModel,
+          })
+        }
+
+        // Tool calls → parallel execution with caching (#3, #21)
         if (result.toolCalls.length > 0) {
-          // Save assistant message with tool calls
           this.memory.addMessage(sessionId, {
             role: 'assistant',
             content: result.content,
@@ -148,59 +227,81 @@ export class AgentLoop {
             timestamp: Date.now(),
           })
 
-          // Execute each tool
-          for (const toolCall of result.toolCalls) {
-            const handler = this.toolHandlers.get(toolCall.name)
-            let toolResult: string
+          const toolResults = await Promise.allSettled(
+            result.toolCalls.map(async (toolCall) => {
+              const handler = this.toolHandlers.get(toolCall.name)
+              let toolResult: string
 
-            eventBus.emit('tool:call', {
-              type: 'tool:call',
-              sessionId,
-              tool: toolCall.name,
-              args: toolCall.arguments,
-            })
+              eventBus.emit('tool:call', {
+                type: 'tool:call',
+                sessionId,
+                tool: toolCall.name,
+                args: toolCall.arguments,
+              })
 
-            const startTime = Date.now()
+              const startTime = Date.now()
 
-            if (handler) {
-              try {
-                log.info(`Executing tool: ${toolCall.name}`)
-                toolResult = await handler(toolCall.arguments)
-                // Truncate long tool output
-                toolResult = truncateToolOutput(toolResult)
-              } catch (e) {
-                toolResult = `Error: ${e instanceof Error ? e.message : String(e)}`
-                log.error(`Tool ${toolCall.name} failed:`, e)
+              // Tool caching (#21)
+              const cacheKey = toolCacheKey(toolCall.name, toolCall.arguments)
+              if (cacheKey) {
+                const cached = toolCache.get(cacheKey)
+                if (cached) {
+                  log.info(`Tool cache hit: ${toolCall.name}`)
+                  const durationMs = Date.now() - startTime
+                  eventBus.emit('tool:result', {
+                    type: 'tool:result', sessionId, tool: toolCall.name,
+                    result: '(cached) ' + cached.slice(0, 150), durationMs, isError: false,
+                  })
+                  return { toolCall, toolResult: cached }
+                }
               }
+
+              if (handler) {
+                try {
+                  log.info(`Executing tool: ${toolCall.name}`)
+                  toolResult = await handler(toolCall.arguments)
+                  toolResult = truncateToolOutput(toolResult)
+
+                  // Save to cache if cacheable (#21)
+                  if (cacheKey && !toolResult.startsWith('Error:')) {
+                    toolCache.set(cacheKey, toolResult)
+                  }
+                } catch (e) {
+                  toolResult = `Error: ${e instanceof Error ? e.message : String(e)}`
+                  log.error(`Tool ${toolCall.name} failed:`, e)
+                }
+              } else {
+                toolResult = `Error: Unknown tool "${toolCall.name}"`
+              }
+
+              const durationMs = Date.now() - startTime
+              eventBus.emit('tool:result', {
+                type: 'tool:result', sessionId, tool: toolCall.name,
+                result: toolResult.slice(0, 200), durationMs,
+                isError: toolResult.startsWith('Error:'),
+              })
+
+              return { toolCall, toolResult }
+            })
+          )
+
+          for (const settled of toolResults) {
+            if (settled.status === 'fulfilled') {
+              this.memory.addMessage(sessionId, {
+                role: 'tool',
+                content: settled.value.toolResult,
+                toolCallId: settled.value.toolCall.id,
+                timestamp: Date.now(),
+              })
             } else {
-              toolResult = `Error: Unknown tool "${toolCall.name}"`
+              log.error('Tool execution unexpected rejection:', settled.reason)
             }
-
-            const durationMs = Date.now() - startTime
-
-            eventBus.emit('tool:result', {
-              type: 'tool:result',
-              sessionId,
-              tool: toolCall.name,
-              result: toolResult.slice(0, 200),
-              durationMs,
-              isError: toolResult.startsWith('Error:'),
-            })
-
-            // Save tool result
-            this.memory.addMessage(sessionId, {
-              role: 'tool',
-              content: toolResult,
-              toolCallId: toolCall.id,
-              timestamp: Date.now(),
-            })
           }
 
-          // Continue loop — AI sẽ xem kết quả tool và trả lời tiếp
           continue
         }
 
-        // Không có tool calls → trả lời text → done
+        // Final text response
         this.memory.addMessage(sessionId, {
           role: 'assistant',
           content: result.content,
@@ -216,26 +317,29 @@ export class AgentLoop {
 
         log.info(`Response generated (${rounds} round${rounds > 1 ? 's' : ''})`)
         traceContext.end()
+
+        // Auto-title generation (#23) — on first response only
+        const allMessages = this.memory.getMessages(sessionId)
+        if (allMessages.filter(m => m.role === 'user').length <= 2) {
+          this.generateTitle(sessionId).catch(() => {}) // fire-and-forget
+        }
+
         return result.content
       }
 
       const fallback = 'Reached maximum tool execution rounds. Please try a simpler request.'
-      this.memory.addMessage(sessionId, {
-        role: 'assistant',
-        content: fallback,
-        timestamp: Date.now(),
-      })
+      this.memory.addMessage(sessionId, { role: 'assistant', content: fallback, timestamp: Date.now() })
       traceContext.end()
       return fallback
     } catch (e) {
       const errorMsg = e instanceof Error ? e.message : String(e)
-      eventBus.emit('agent:error', {
-        type: 'agent:error',
-        sessionId,
-        error: errorMsg,
-      })
+      eventBus.emit('agent:error', { type: 'agent:error', sessionId, error: errorMsg })
+      log.error(`Agent error: ${errorMsg}`)
       traceContext.end()
-      throw e
+
+      const userFriendlyError = `⚠️ Error: ${errorMsg}`
+      this.memory.addMessage(sessionId, { role: 'assistant', content: userFriendlyError, timestamp: Date.now() })
+      return userFriendlyError
     }
   }
 }

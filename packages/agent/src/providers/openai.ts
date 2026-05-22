@@ -26,10 +26,16 @@ export interface CompletionResult {
 
 export class OpenAIProvider {
   private client: OpenAI
+  private providerName: string = 'OpenAI'
 
   constructor(apiKey: string, baseUrl?: string) {
     this.client = new OpenAI({ apiKey, baseURL: baseUrl })
-    log.info(`OpenAI provider initialized${baseUrl ? ` (${baseUrl})` : ''}`)
+    if (baseUrl?.includes('openrouter.ai')) {
+      this.providerName = 'OpenRouter'
+    } else if (baseUrl?.includes('ollama') || baseUrl?.includes('11434')) {
+      this.providerName = 'Ollama'
+    }
+    log.info(`${this.providerName} provider initialized${baseUrl ? ` (${baseUrl})` : ''}`)
   }
 
   private buildMessages(systemPrompt: string, messages: SessionMessage[]): OpenAI.ChatCompletionMessageParam[] {
@@ -39,7 +45,17 @@ export class OpenAIProvider {
 
     for (const msg of messages) {
       if (msg.role === 'user') {
-        result.push({ role: 'user', content: msg.content })
+        if (msg.images && msg.images.length > 0) {
+          const content: OpenAI.ChatCompletionContentPart[] = [
+            { type: 'text', text: msg.content || '' }
+          ]
+          for (const img of msg.images) {
+            content.push({ type: 'image_url', image_url: { url: img } })
+          }
+          result.push({ role: 'user', content })
+        } else {
+          result.push({ role: 'user', content: msg.content })
+        }
       } else if (msg.role === 'assistant') {
         const assistantMsg: OpenAI.ChatCompletionAssistantMessageParam = {
           role: 'assistant',
@@ -110,7 +126,7 @@ export class OpenAIProvider {
         } : undefined,
       }
     } catch (e) {
-      throw new ProviderError(`OpenAI API error: ${e instanceof Error ? e.message : String(e)}`, e)
+      throw new ProviderError(`${this.providerName} API error: ${e instanceof Error ? e.message : String(e)}`, e)
     }
   }
 

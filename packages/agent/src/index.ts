@@ -10,3 +10,4 @@ export {
 } from './context.js'
 export type { IProvider } from './providers/index.js'
 export type { CompletionOptions, CompletionResult } from './providers/openai.js'
+export { delegateTaskDef, listAgentsDef, createDelegationTools, SUB_AGENTS, type SubAgentProfile } from './delegation.js'

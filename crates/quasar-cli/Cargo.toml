@@ -1,0 +1,22 @@
+[package]
+name = "quasar-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "quasar"
+path = "src/main.rs"
+
+[dependencies]
+quasar-core = { workspace = true }
+quasar-agent = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+dotenvy = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

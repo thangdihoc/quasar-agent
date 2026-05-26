@@ -1,0 +1,63 @@
+[workspace]
+members = [
+    "crates/quasar-core",
+    "crates/quasar-agent",
+    "crates/quasar-memory",
+    "crates/quasar-tools",
+    "crates/quasar-mcp",
+    "crates/quasar-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2021"
+authors = ["Quasar Team"]
+license = "MIT"
+repository = "https://github.com/yourusername/quasar-agent"
+
+[workspace.dependencies]
+# Core dependencies
+tokio = { version = "1.42", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+async-trait = "0.1"
+
+# HTTP & API clients
+reqwest = { version = "0.12", features = ["json", "stream"] }
+async-openai = "0.27"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
+
+# Config & CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+dotenvy = "0.15"
+toml = "0.8"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+dashmap = "6.1"
+parking_lot = "0.12"
+
+# Tokenization
+tiktoken-rs = "0.6"
+
+# Internal workspace crates
+quasar-core = { path = "crates/quasar-core" }
+quasar-agent = { path = "crates/quasar-agent" }
+quasar-memory = { path = "crates/quasar-memory" }
+quasar-tools = { path = "crates/quasar-tools" }
+quasar-mcp = { path = "crates/quasar-mcp" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

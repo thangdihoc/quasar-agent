@@ -1,31 +1,36 @@
-# Dependencies
-node_modules/
+# Rust
+/target/
+/crates/*/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
 
-# Build
+# Node.js (existing)
+node_modules/
 dist/
-*.js.map
+*.log
+.env
+.env.local
 
 # Data
-data/
-*.db
-*.db-shm
-*.db-wal
+/data/*.db
+/data/*.db-shm
+/data/*.db-wal
+/data/lancedb/
+/data/sandbox/
+/data/memory/
 
-# Environment
-.env
-
-# Rust
-native/target/
-native/*.node
-
-# Python
-modules/**/__pycache__/
-modules/**/.venv/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
+# Config
+quasar.toml
+!examples/quasar.example.toml

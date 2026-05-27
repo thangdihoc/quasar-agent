@@ -3,12 +3,15 @@
 // Upgrades: #3 parallel tools, #5 token tracking, #6 per-session model,
 // #17 error recovery, #21 tool caching, #23 auto-title
 
-import type { QuasarConfig, SessionMessage, ToolDef, SessionId, ProviderName } from '@quasar/core'
+import type { QuasarConfig, SessionMessage, ToolDef, SessionId, ProviderName, McpServerConfig } from '@quasar/core'
 import { createLogger, eventBus, traceContext, toolCache, toolCacheKey } from '@quasar/core'
 import { SqliteMemory, LanceDBMemory } from '@quasar/memory'
 import { createProvider, detectProvider, stripModelPrefix, type IProvider } from './providers/index.js'
 import { buildSystemPrompt } from './prompt.js'
 import { buildContextWindow, estimateTokens, truncateToolOutput } from './context.js'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { resolve } from 'path'
+import { McpClientManager } from '@quasar/mcp'
 
 const log = createLogger('agent:loop')
 
@@ -24,6 +27,7 @@ export class AgentLoop {
   private toolHandlers = new Map<string, (args: Record<string, unknown>) => Promise<string>>()
   private defaultModel: string
   private sessionModels = new Map<SessionId, string>()
+  private mcpManager = new McpClientManager()
 
   constructor(config: QuasarConfig, memory: SqliteMemory, vectorMemory?: LanceDBMemory) {
     this.config = config
@@ -31,6 +35,141 @@ export class AgentLoop {
     this.vectorMemory = vectorMemory
     this.defaultModel = config.agent.model
     log.info(`Agent loop initialized with default model: ${this.defaultModel}`)
+    this.loadMcpServers().catch((err) => log.error('Failed to load dynamic MCP servers on startup:', err))
+  }
+
+  async loadMcpServers(): Promise<void> {
+    try {
+      const mcpConfigPath = resolve('./data/mcp-servers.json')
+      if (!existsSync(mcpConfigPath)) {
+        log.info('No dynamic MCP servers configuration file found.')
+        return
+      }
+
+      const content = readFileSync(mcpConfigPath, 'utf-8')
+      const servers = JSON.parse(content) as McpServerConfig[]
+      log.info(`Loading ${servers.length} dynamic MCP servers...`)
+
+      for (const serverConfig of servers) {
+        try {
+          const tools = await this.mcpManager.connect(serverConfig)
+          for (const tool of tools) {
+            this.registerTool(tool, async (args) => {
+              return await this.mcpManager.callTool(serverConfig.name, tool.name, args)
+            })
+          }
+        } catch (err) {
+          log.error(`Failed to connect dynamic MCP server ${serverConfig.name}:`, err)
+        }
+      }
+    } catch (e) {
+      log.error('Failed to load dynamic MCP servers configuration:', e)
+    }
+  }
+
+  getMcpManager(): McpClientManager {
+    return this.mcpManager
+  }
+
+  async connectMcpServer(serverConfig: McpServerConfig, save = true): Promise<ToolDef[]> {
+    // 1. Remove existing tools/connections for this name first
+    this.unregisterMcpTools(serverConfig.name)
+    await this.mcpManager.disconnect(serverConfig.name)
+
+    // 2. Connect to the MCP server
+    const tools = await this.mcpManager.connect(serverConfig)
+
+    // 3. Register the tools to agent loop
+    for (const tool of tools) {
+      this.registerTool(tool, async (args) => {
+        return await this.mcpManager.callTool(serverConfig.name, tool.name, args)
+      })
+    }
+
+    // 4. Save to configuration file if requested
+    if (save) {
+      this.saveMcpServerConfig(serverConfig)
+    }
+
+    return tools
+  }
+
+  async disconnectMcpServer(serverName: string): Promise<void> {
+    // 1. Unregister tools
+    this.unregisterMcpTools(serverName)
+
+    // 2. Disconnect client
+    await this.mcpManager.disconnect(serverName)
+
+    // 3. Remove from config file
+    this.removeMcpServerConfig(serverName)
+  }
+
+  private unregisterMcpTools(serverName: string): void {
+    const prefix = `mcp_${serverName}_`
+    this.toolDefs = this.toolDefs.filter(t => !t.name.startsWith(prefix))
+    for (const name of this.toolHandlers.keys()) {
+      if (name.startsWith(prefix)) {
+        this.toolHandlers.delete(name)
+      }
+    }
+    log.info(`Unregistered all tools for MCP server: ${serverName}`)
+  }
+
+  private saveMcpServerConfig(serverConfig: McpServerConfig): void {
+    try {
+      const mcpConfigPath = resolve('./data/mcp-servers.json')
+      let servers: McpServerConfig[] = []
+      if (existsSync(mcpConfigPath)) {
+        try {
+          servers = JSON.parse(readFileSync(mcpConfigPath, 'utf-8'))
+        } catch { /* ignore */ }
+      }
+
+      // Filter out existing and append new
+      servers = servers.filter(s => s.name !== serverConfig.name)
+      servers.push(serverConfig)
+
+      writeFileSync(mcpConfigPath, JSON.stringify(servers, null, 2), 'utf-8')
+      log.info(`Saved MCP server config: ${serverConfig.name}`)
+    } catch (e) {
+      log.error('Failed to save MCP server config:', e)
+    }
+  }
+
+  private removeMcpServerConfig(serverName: string): void {
+    try {
+      const mcpConfigPath = resolve('./data/mcp-servers.json')
+      if (!existsSync(mcpConfigPath)) return
+
+      let servers: McpServerConfig[] = []
+      try {
+        servers = JSON.parse(readFileSync(mcpConfigPath, 'utf-8'))
+      } catch { /* ignore */ }
+
+      const filtered = servers.filter(s => s.name !== serverName)
+      writeFileSync(mcpConfigPath, JSON.stringify(filtered, null, 2), 'utf-8')
+      log.info(`Removed MCP server config: ${serverName}`)
+    } catch (e) {
+      log.error('Failed to remove MCP server config:', e)
+    }
+  }
+
+  async disconnectAllMcp(): Promise<void> {
+    await this.mcpManager.disconnectAll()
+  }
+
+  getMcpServersList(): McpServerConfig[] {
+    try {
+      const mcpConfigPath = resolve('./data/mcp-servers.json')
+      if (!existsSync(mcpConfigPath)) return []
+
+      const content = readFileSync(mcpConfigPath, 'utf-8')
+      return JSON.parse(content) as McpServerConfig[]
+    } catch (e) {
+      log.error('Failed to read MCP servers list:', e)
+      return []
+    }
   }
 
   registerTool(def: ToolDef, handler: (args: Record<string, unknown>) => Promise<string>): void {
@@ -144,7 +283,7 @@ export class AgentLoop {
   async process(
     sessionId: SessionId,
     userMessage: string,
-    opts?: { stream?: boolean; onChunk?: (text: string) => void; images?: string[] }
+    opts?: { stream?: boolean; onChunk?: (text: string) => void; images?: string[]; disabledIntegrations?: string[] }
   ): Promise<string> {
     const traceId = traceContext.start()
     const currentModel = this.getModel(sessionId)
@@ -191,10 +330,25 @@ export class AgentLoop {
         const rawMessages = this.memory.getMessages(sessionId)
         const messages = buildContextWindow(rawMessages, MAX_CONTEXT_TOKENS, systemPromptTokens)
 
+        let filteredTools = this.toolDefs
+        if (opts?.disabledIntegrations && opts.disabledIntegrations.length > 0) {
+          const disabledLower = opts.disabledIntegrations.map(s => s.toLowerCase())
+          filteredTools = this.toolDefs.filter(tool => {
+            const match = tool.name.match(/^mcp_([^_]+)_/)
+            if (match) {
+              const serverName = match[1].toLowerCase()
+              if (disabledLower.includes(serverName)) {
+                return false
+              }
+            }
+            return true
+          })
+        }
+
         const result = await provider.complete({
           model: modelName,
           messages,
-          tools: this.toolDefs,
+          tools: filteredTools,
           systemPrompt,
           maxTokens: this.config.agent.maxTokens,
           stream: opts?.stream,

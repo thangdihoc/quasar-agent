@@ -62,6 +62,24 @@ export class McpClientManager {
     return content.map(c => c.text || '').join('\n')
   }
 
+  async disconnect(serverName: string): Promise<void> {
+    const conn = this.connections.get(serverName)
+    if (conn) {
+      try {
+        await conn.transport.close()
+        log.info(`Disconnected: ${serverName}`)
+      } catch { /* ignore */ }
+      this.connections.delete(serverName)
+    }
+  }
+
+  getConnectedServers(): Array<{ name: string; tools: ToolDef[] }> {
+    return Array.from(this.connections.entries()).map(([name, conn]) => ({
+      name,
+      tools: conn.tools
+    }))
+  }
+
   async disconnectAll(): Promise<void> {
     for (const [name, conn] of this.connections) {
       try {

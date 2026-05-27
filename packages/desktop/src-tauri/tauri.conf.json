@@ -9,21 +9,8 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Nova Mascot",
-        "label": "main",
-        "width": 300,
-        "height": 350,
-        "resizable": false,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "x": 1550,
-        "y": 650
-      },
-      {
         "title": "Quasar Chat",
-        "label": "chat",
+        "label": "main",
         "width": 1020,
         "height": 720,
         "resizable": true,

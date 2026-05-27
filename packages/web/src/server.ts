@@ -7,7 +7,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
-import { createLogger, eventBus, metricsCollector, toolCache } from '@quasar/core'
+import { createLogger, eventBus, metricsCollector, toolCache, type McpServerConfig } from '@quasar/core'
 import type { AgentLoop } from '@quasar/agent'
 import { SqliteMemory } from '@quasar/memory'
 import { getLatestBrowserState } from '@quasar/tools'
@@ -34,12 +34,18 @@ export function createWebServer(
   const app = express()
   const server = createServer(app)
 
+  const oauthSessions = new Map<string, {
+    serviceName: string;
+    clientId: string;
+    clientSecret: string;
+  }>()
+
   app.use(express.json())
 
   // Auth middleware (#10)
   if (apiKey) {
     app.use('/api', (req, res, next) => {
-      if (req.path === '/health') return next() // health check is public
+      if (req.path === '/health' || req.path === '/oauth/callback') return next() // health check & oauth callback are public
       const token = req.headers.authorization?.replace('Bearer ', '') || req.query.key
       if (token !== apiKey) {
         res.status(401).json({ error: 'Unauthorized. Provide API key via Authorization header or ?key= query param.' })
@@ -60,7 +66,7 @@ export function createWebServer(
 
   // API: Send message
   app.post('/api/chat', async (req, res) => {
-    const { sessionId, message } = req.body as { sessionId?: string; message?: string }
+    const { sessionId, message, disabledIntegrations } = req.body as { sessionId?: string; message?: string; disabledIntegrations?: string[] }
     if (!message) { res.status(400).json({ error: 'message required' }); return }
 
     let sid = sessionId
@@ -70,7 +76,7 @@ export function createWebServer(
     }
 
     try {
-      const response = await agentLoop.process(sid, message)
+      const response = await agentLoop.process(sid, message, { disabledIntegrations })
       res.json({ sessionId: sid, response })
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'Unknown error' })
@@ -79,7 +85,7 @@ export function createWebServer(
 
   // API: Stream chat (SSE) — used by Web UI (#1)
   app.post('/api/chat/stream', async (req, res) => {
-    const { sessionId, message } = req.body as { sessionId?: string; message?: string }
+    const { sessionId, message, disabledIntegrations } = req.body as { sessionId?: string; message?: string; disabledIntegrations?: string[] }
     if (!message) { res.status(400).json({ error: 'message required' }); return }
 
     let sid = sessionId
@@ -95,6 +101,7 @@ export function createWebServer(
     try {
       await agentLoop.process(sid, message, {
         stream: true,
+        disabledIntegrations,
         onChunk: (chunk) => {
           res.write(`data: ${JSON.stringify({ chunk })}\n\n`)
         },
@@ -236,6 +243,220 @@ export function createWebServer(
     res.json({ success: true, model: agentLoop.getModel() })
   })
 
+  // API: Get dynamic MCP servers status & tools
+  app.get('/api/mcp', (_req, res) => {
+    try {
+      const configured = agentLoop.getMcpServersList()
+      const connected = agentLoop.getMcpManager().getConnectedServers()
+
+      const response = configured.map(server => {
+        const conn = connected.find(c => c.name === server.name)
+        return {
+          ...server,
+          connected: !!conn,
+          tools: conn ? conn.tools : []
+        }
+      })
+
+      res.json(response)
+    } catch (e) {
+      log.error('Failed to get MCP servers list:', e)
+      res.status(500).json({ error: e instanceof Error ? e.message : 'Unknown error' })
+    }
+  })
+
+  // API: Connect/save dynamic MCP server
+  app.post('/api/mcp', async (req, res) => {
+    const config = req.body as McpServerConfig
+    if (!config || !config.name || !config.command || !config.args) {
+      res.status(400).json({ error: 'name, command, and args are required' })
+      return
+    }
+
+    try {
+      log.info(`API Request to connect MCP server: ${config.name}`)
+      const tools = await agentLoop.connectMcpServer(config)
+      res.json({ success: true, tools })
+    } catch (e) {
+      log.error(`API Failed to connect MCP server ${config.name}:`, e)
+      res.status(500).json({ error: e instanceof Error ? e.message : 'Unknown error' })
+    }
+  })
+
+  // API: Disconnect dynamic MCP server
+  app.delete('/api/mcp/:name', async (req, res) => {
+    const { name } = req.params
+    if (!name) {
+      res.status(400).json({ error: 'server name is required' })
+      return
+    }
+
+    try {
+      log.info(`API Request to disconnect MCP server: ${name}`)
+      await agentLoop.disconnectMcpServer(name)
+      res.json({ success: true })
+    } catch (e) {
+      log.error(`API Failed to disconnect MCP server ${name}:`, e)
+      res.status(500).json({ error: e instanceof Error ? e.message : 'Unknown error' })
+    }
+  })
+
+  // API: Get OAuth Auth URL
+  app.get('/api/oauth/url', (req, res) => {
+    const { serviceName, clientId, clientSecret } = req.query as { serviceName?: string; clientId?: string; clientSecret?: string }
+    if (!serviceName || !clientId || !clientSecret) {
+      res.status(400).json({ error: 'serviceName, clientId, and clientSecret are required' })
+      return
+    }
+
+    const state = randomUUID()
+    oauthSessions.set(state, { serviceName, clientId, clientSecret })
+
+    let scopes = ''
+    if (serviceName === 'gmail') {
+      scopes = 'https://mail.google.com/'
+    } else if (serviceName === 'gdrive') {
+      scopes = 'https://www.googleapis.com/auth/drive'
+    } else if (serviceName === 'gcal') {
+      scopes = 'https://www.googleapis.com/auth/calendar'
+    }
+
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` + new URLSearchParams({
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: `http://${host}:${port}/api/oauth/callback`,
+      scope: scopes,
+      access_type: 'offline',
+      prompt: 'consent',
+      state: state
+    }).toString()
+
+    res.json({ url: authUrl })
+  })
+
+  // API: OAuth Callback
+  app.get('/api/oauth/callback', async (req, res) => {
+    const { code, state, error } = req.query as { code?: string; state?: string; error?: string }
+    
+    if (error) {
+      res.send(`
+        <html>
+          <body style="font-family: sans-serif; text-align: center; padding: 40px;">
+            <h2 style="color: #ef4444;">Lỗi Xác thực Google Login</h2>
+            <p>${error}</p>
+            <button onclick="window.close()" style="padding: 10px 20px; font-size: 14px; cursor: pointer; border-radius: 6px; border: 1px solid #ccc;">Đóng cửa sổ</button>
+          </body>
+        </html>
+      `)
+      return
+    }
+
+    if (!code || !state) {
+      res.status(400).send('Missing code or state')
+      return
+    }
+
+    const session = oauthSessions.get(state)
+    if (!session) {
+      res.status(400).send('OAuth session not found or expired')
+      return
+    }
+
+    oauthSessions.delete(state)
+
+    try {
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code: code,
+          client_id: session.clientId,
+          client_secret: session.clientSecret,
+          redirect_uri: `http://${host}:${port}/api/oauth/callback`,
+          grant_type: 'authorization_code',
+        })
+      })
+
+      if (!tokenRes.ok) {
+        const errorText = await tokenRes.text()
+        throw new Error(`Failed to exchange code: ${errorText}`)
+      }
+
+      const tokens = await tokenRes.json() as { refresh_token?: string }
+      if (!tokens.refresh_token) {
+        throw new Error('Google did not return a refresh token. Make sure you revoke existing access in Google settings or add prompt=consent.')
+      }
+
+      let mcpConfig: McpServerConfig
+      if (session.serviceName === 'gmail') {
+        mcpConfig = {
+          name: 'gmail',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-gmail'],
+          env: {
+            GMAIL_CLIENT_ID: session.clientId,
+            GMAIL_CLIENT_SECRET: session.clientSecret,
+            GMAIL_REFRESH_TOKEN: tokens.refresh_token
+          }
+        }
+      } else if (session.serviceName === 'gdrive') {
+        mcpConfig = {
+          name: 'gdrive',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-gdrive'],
+          env: {
+            GDRIVE_CLIENT_ID: session.clientId,
+            GDRIVE_CLIENT_SECRET: session.clientSecret,
+            GDRIVE_REFRESH_TOKEN: tokens.refresh_token
+          }
+        }
+      } else {
+        mcpConfig = {
+          name: 'gcal',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-google-calendar'],
+          env: {
+            GOOGLE_CLIENT_ID: session.clientId,
+            GOOGLE_CLIENT_SECRET: session.clientSecret,
+            GOOGLE_REFRESH_TOKEN: tokens.refresh_token
+          }
+        }
+      }
+
+      log.info(`Connecting dynamic MCP server from Google OAuth: ${session.serviceName}`)
+      await agentLoop.connectMcpServer(mcpConfig)
+
+      res.send(`
+        <html>
+          <body style="font-family: sans-serif; text-align: center; padding: 40px;">
+            <h2 style="color: #10b981;">Kết nối Google thành công! 🎉</h2>
+            <p>Đã thiết lập liên kết thành công với ứng dụng Google của bạn.</p>
+            <p>Cửa sổ này sẽ tự động đóng.</p>
+            <script>
+              setTimeout(() => {
+                if (window.opener) {
+                  window.opener.postMessage({ type: 'oauth-success', serviceName: '${session.serviceName}' }, '*');
+                }
+                window.close();
+              }, 2000);
+            </script>
+          </body>
+        </html>
+      `)
+    } catch (err: any) {
+      log.error(`OAuth callback error: ${err.message}`)
+      res.send(`
+        <html>
+          <body style="font-family: sans-serif; text-align: center; padding: 40px;">
+            <h2 style="color: #ef4444;">Lỗi Xác thực Google</h2>
+            <p>${err.message}</p>
+            <button onclick="window.close()" style="padding: 10px 20px; font-size: 14px; cursor: pointer; border-radius: 6px; border: 1px solid #ccc;">Đóng cửa sổ</button>
+          </body>
+        </html>
+      `)
+    }
+  })
+
   // API: Health
   app.get('/api/health', (_req, res) => {
     res.json({
@@ -268,7 +489,7 @@ export function createWebServer(
   })
 
   // --- WebSocket for Nova Mascot ---
-  const novaWss = new WebSocketServer({ noServer: true, permessageDeflate: false })
+  const novaWss = new WebSocketServer({ noServer: true, perMessageDeflate: false })
   
   const broadcastNovaState = (state: string, detail?: string) => {
     const msg = JSON.stringify({ state, detail })
@@ -292,7 +513,7 @@ export function createWebServer(
   })
 
   // --- WebSocket (#14) ---
-  const wss = new WebSocketServer({ noServer: true, permessageDeflate: false })
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false })
 
   // Broadcast events to all connected WS clients for Admin Dashboard (#30)
   const broadcastEvent = (type: string, payload: any) => {
@@ -360,7 +581,14 @@ export function createWebServer(
 
     ws.on('message', async (data) => {
       try {
-        const msg = JSON.parse(data.toString()) as { type: string; message?: string; sessionId?: string; model?: string; images?: string[] }
+        const msg = JSON.parse(data.toString()) as {
+          type: string;
+          message?: string;
+          sessionId?: string;
+          model?: string;
+          images?: string[];
+          disabledIntegrations?: string[];
+        }
 
         if (msg.type === 'chat') {
           if (!msg.message) {
@@ -380,6 +608,7 @@ export function createWebServer(
             const response = await agentLoop.process(wsSessionId, msg.message, {
               stream: true,
               images: msg.images, // Vision support (#19)
+              disabledIntegrations: msg.disabledIntegrations,
               onChunk: (chunk) => {
                 if (ws.readyState === WebSocket.OPEN) {
                   ws.send(JSON.stringify({ type: 'chunk', chunk }))

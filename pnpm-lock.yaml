@@ -41,6 +41,9 @@ importers:
       '@quasar/core':
         specifier: workspace:*
         version: link:../core
+      '@quasar/mcp':
+        specifier: workspace:*
+        version: link:../mcp
       '@quasar/memory':
         specifier: workspace:*
         version: link:../memory
@@ -102,6 +105,16 @@ importers:
         specifier: ^16.4.7
         version: 16.6.1
 
+  packages/desktop:
+    dependencies:
+      '@tauri-apps/api':
+        specifier: ^2.0.0
+        version: 2.11.0
+    devDependencies:
+      '@tauri-apps/cli':
+        specifier: ^2.0.0
+        version: 2.11.2
+
   packages/mcp:
     dependencies:
       '@modelcontextprotocol/sdk':
@@ -131,16 +144,6 @@ importers:
       better-sqlite3:
         specifier: ^11.7.0
         version: 11.10.0
-
-  packages/nova:
-    dependencies:
-      '@tauri-apps/api':
-        specifier: ^2.0.0
-        version: 2.11.0
-    devDependencies:
-      '@tauri-apps/cli':
-        specifier: ^2.0.0
-        version: 2.11.2
 
   packages/scheduler:
     dependencies:

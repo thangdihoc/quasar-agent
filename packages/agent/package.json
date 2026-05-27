@@ -8,6 +8,7 @@
     "@quasar/core": "workspace:*",
     "@quasar/memory": "workspace:*",
     "@quasar/native": "workspace:*",
+    "@quasar/mcp": "workspace:*",
     "openai": "^4.104.0",
     "@anthropic-ai/sdk": "^0.39.0",
     "@google/generative-ai": "^0.24.0"

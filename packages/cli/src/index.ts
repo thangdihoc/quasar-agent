@@ -246,19 +246,13 @@ async function start() {
     onTaskTrigger: handleTaskTrigger,
   })
 
-  // Init MCP Client Manager and connect to MCP servers
-  const mcpManager = new McpClientManager()
+  // Connect to static MCP servers defined in configuration file
   if (config.mcp?.servers) {
     for (const serverConfig of config.mcp.servers) {
       try {
-        const tools = await mcpManager.connect(serverConfig)
-        for (const tool of tools) {
-          agentLoop.registerTool(tool, async (args) => {
-            return await mcpManager.callTool(serverConfig.name, tool.name, args)
-          })
-        }
+        await agentLoop.connectMcpServer(serverConfig, false)
       } catch (err) {
-        log.error(`Failed to connect MCP server ${serverConfig.name}:`, err)
+        log.error(`Failed to connect static MCP server ${serverConfig.name}:`, err)
       }
     }
   }
@@ -354,7 +348,7 @@ async function start() {
 
     // Disconnect MCP servers
     try {
-      await mcpManager.disconnectAll()
+      await agentLoop.disconnectAllMcp()
     } catch { /* ignore */ }
 
     // Terminate Python Computer Use service

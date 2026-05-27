@@ -1,0 +1,457 @@
+/* ============================================
+   Nova Desktop Mascot — Styles & Animations
+   4 states: idle, thinking, speaking, listening
+   ============================================ */
+
+:root {
+  /* Color palette */
+  --nova-primary: #6c5ce7;
+  --nova-secondary: #a29bfe;
+  --nova-accent: #00cec9;
+  --nova-glow: rgba(108, 92, 231, 0.4);
+  --nova-thinking: #fdcb6e;
+  --nova-speaking: #55efc4;
+  --nova-listening: #74b9ff;
+  --nova-bg: transparent;
+  
+  /* Sizes */
+  --body-size: 140px;
+  --eye-size: 22px;
+  --pupil-size: 10px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: 'Inter', sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Container ── */
+#nova-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+}
+
+#nova-container:active {
+  cursor: grabbing;
+}
+
+/* ── Glow Ring ── */
+#nova-glow {
+  position: absolute;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--nova-glow) 0%, transparent 70%);
+  animation: glow-pulse 3s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes glow-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+
+/* ── Main Body ── */
+#nova-body {
+  position: relative;
+  width: var(--body-size);
+  height: var(--body-size);
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--nova-primary), var(--nova-secondary));
+  box-shadow: 
+    0 0 30px var(--nova-glow),
+    inset 0 -5px 15px rgba(0,0,0,0.2),
+    inset 0 5px 15px rgba(255,255,255,0.1);
+  animation: float 4s ease-in-out infinite;
+  z-index: 2;
+  transition: background 0.6s ease, box-shadow 0.6s ease;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
+/* ── Face ── */
+#nova-face {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80px;
+  height: 50px;
+}
+
+/* ── Eyes ── */
+.nova-eye {
+  position: absolute;
+  width: var(--eye-size);
+  height: var(--eye-size);
+  background: #fff;
+  border-radius: 50%;
+  top: 8px;
+  overflow: hidden;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.nova-eye.left { left: 10px; }
+.nova-eye.right { right: 10px; }
+
+.nova-pupil {
+  width: var(--pupil-size);
+  height: var(--pupil-size);
+  background: #2d3436;
+  border-radius: 50%;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  transition: all 0.15s ease;
+}
+
+.nova-pupil::after {
+  content: '';
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: #fff;
+  border-radius: 50%;
+  top: 1px;
+  right: 1px;
+}
+
+/* Blink animation */
+.nova-eye {
+  animation: blink 4s ease-in-out infinite;
+}
+
+.nova-eye.right {
+  animation-delay: 0.1s;
+}
+
+@keyframes blink {
+  0%, 46%, 54%, 100% { transform: scaleY(1); }
+  48%, 52% { transform: scaleY(0.05); }
+}
+
+/* ── Mouth ── */
+#nova-mouth {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 20px;
+  height: 10px;
+  border-radius: 0 0 20px 20px;
+  background: rgba(255,255,255,0.3);
+  transition: all 0.3s ease;
+}
+
+/* ── Status Ring ── */
+#nova-ring {
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  right: -6px;
+  bottom: -6px;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  transition: border-color 0.4s ease;
+}
+
+/* ── Particles ── */
+#nova-particles {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.particle {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--nova-secondary);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.p1 { top: 20%; left: 10%; }
+.p2 { top: 10%; right: 20%; }
+.p3 { bottom: 20%; left: 15%; }
+.p4 { bottom: 15%; right: 10%; }
+.p5 { top: 40%; left: 0%; }
+.p6 { top: 35%; right: 5%; }
+
+/* ── State Label ── */
+#nova-label {
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 6px rgba(0,0,0,0.5);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  z-index: 3;
+  transition: color 0.4s ease;
+}
+
+/* ============================================
+   STATE: IDLE — Calm floating, gentle blink
+   ============================================ */
+[data-state="idle"] #nova-body {
+  background: linear-gradient(135deg, var(--nova-primary), var(--nova-secondary));
+  animation: float 4s ease-in-out infinite;
+}
+
+[data-state="idle"] #nova-glow {
+  background: radial-gradient(circle, var(--nova-glow) 0%, transparent 70%);
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+
+[data-state="idle"] #nova-ring {
+  border-color: transparent;
+}
+
+/* ============================================
+   STATE: THINKING — Pulsing glow, orbit particles
+   ============================================ */
+[data-state="thinking"] #nova-body {
+  background: linear-gradient(135deg, #e17055, var(--nova-thinking));
+  animation: float 2.5s ease-in-out infinite;
+  box-shadow:
+    0 0 40px rgba(253, 203, 110, 0.5),
+    inset 0 -5px 15px rgba(0,0,0,0.2);
+}
+
+[data-state="thinking"] #nova-glow {
+  background: radial-gradient(circle, rgba(253, 203, 110, 0.5) 0%, transparent 70%);
+  animation: glow-pulse 1.5s ease-in-out infinite;
+}
+
+[data-state="thinking"] #nova-ring {
+  border-color: var(--nova-thinking);
+  animation: ring-spin 2s linear infinite;
+  border-style: dashed;
+}
+
+@keyframes ring-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+[data-state="thinking"] .particle {
+  opacity: 0.8;
+  background: var(--nova-thinking);
+  animation: orbit 3s linear infinite;
+}
+
+.p1 { animation-delay: 0s !important; }
+.p2 { animation-delay: 0.5s !important; }
+.p3 { animation-delay: 1s !important; }
+.p4 { animation-delay: 1.5s !important; }
+.p5 { animation-delay: 2s !important; }
+.p6 { animation-delay: 2.5s !important; }
+
+@keyframes orbit {
+  0% { transform: rotate(0deg) translateX(80px) rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) translateX(80px) rotate(-180deg) scale(1.5); }
+  100% { transform: rotate(360deg) translateX(80px) rotate(-360deg) scale(1); }
+}
+
+[data-state="thinking"] .nova-eye {
+  animation: blink-fast 2s ease-in-out infinite;
+}
+
+@keyframes blink-fast {
+  0%, 40%, 60%, 100% { transform: scaleY(1); }
+  45%, 55% { transform: scaleY(0.05); }
+}
+
+[data-state="thinking"] #nova-mouth {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.25);
+}
+
+[data-state="thinking"] #nova-label {
+  color: var(--nova-thinking);
+}
+
+/* ============================================
+   STATE: SPEAKING — Mouth animates, wave ripples
+   ============================================ */
+[data-state="speaking"] #nova-body {
+  background: linear-gradient(135deg, #00b894, var(--nova-speaking));
+  animation: float 3s ease-in-out infinite;
+  box-shadow:
+    0 0 40px rgba(85, 239, 196, 0.5),
+    inset 0 -5px 15px rgba(0,0,0,0.2);
+}
+
+[data-state="speaking"] #nova-glow {
+  background: radial-gradient(circle, rgba(85, 239, 196, 0.4) 0%, transparent 70%);
+  animation: glow-pulse 2s ease-in-out infinite;
+}
+
+[data-state="speaking"] #nova-ring {
+  border-color: var(--nova-speaking);
+  animation: ring-pulse 1s ease-in-out infinite;
+}
+
+@keyframes ring-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.6; }
+}
+
+[data-state="speaking"] #nova-mouth {
+  animation: speak 0.4s ease-in-out infinite alternate;
+}
+
+@keyframes speak {
+  0% { 
+    height: 6px; 
+    width: 16px;
+    border-radius: 0 0 16px 16px;
+  }
+  100% { 
+    height: 16px;
+    width: 22px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.4);
+  }
+}
+
+[data-state="speaking"] .particle {
+  opacity: 0.6;
+  background: var(--nova-speaking);
+  animation: ripple 2s ease-out infinite;
+}
+
+@keyframes ripple {
+  0% { transform: scale(0.5); opacity: 0.8; }
+  100% { transform: scale(3); opacity: 0; }
+}
+
+[data-state="speaking"] #nova-label {
+  color: var(--nova-speaking);
+}
+
+/* ============================================
+   STATE: LISTENING — Ear glow, expand/contract
+   ============================================ */
+[data-state="listening"] #nova-body {
+  background: linear-gradient(135deg, #0984e3, var(--nova-listening));
+  animation: listen-breathe 2s ease-in-out infinite;
+  box-shadow:
+    0 0 40px rgba(116, 185, 255, 0.5),
+    inset 0 -5px 15px rgba(0,0,0,0.2);
+}
+
+@keyframes listen-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-6px) scale(1.06); }
+}
+
+[data-state="listening"] #nova-glow {
+  background: radial-gradient(circle, rgba(116, 185, 255, 0.5) 0%, transparent 70%);
+  animation: glow-pulse 1.8s ease-in-out infinite;
+}
+
+[data-state="listening"] #nova-ring {
+  border-color: var(--nova-listening);
+  animation: ring-pulse 1.5s ease-in-out infinite;
+}
+
+[data-state="listening"] .nova-eye {
+  animation: none;
+  transform: scaleY(1.15);
+}
+
+[data-state="listening"] .nova-pupil {
+  width: 12px;
+  height: 12px;
+}
+
+[data-state="listening"] #nova-mouth {
+  width: 14px;
+  height: 8px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.2);
+}
+
+[data-state="listening"] .particle {
+  opacity: 0.5;
+  background: var(--nova-listening);
+  animation: pulse-in 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-in {
+  0%, 100% { transform: scale(1); opacity: 0.3; }
+  50% { transform: scale(1.8); opacity: 0.7; }
+}
+
+[data-state="listening"] #nova-label {
+  color: var(--nova-listening);
+}
+
+/* ── Context Menu ── */
+#context-menu {
+  position: fixed;
+  background: rgba(30, 30, 46, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 6px 0;
+  min-width: 160px;
+  z-index: 100;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+#context-menu.hidden {
+  display: none;
+}
+
+#context-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.85);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+#context-menu button:hover {
+  background: rgba(108, 92, 231, 0.3);
+}
+
+#context-menu hr {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  margin: 4px 0;
+}

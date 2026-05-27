@@ -13,12 +13,7 @@ dist/
 .env.local
 
 # Data
-/data/*.db
-/data/*.db-shm
-/data/*.db-wal
-/data/lancedb/
-/data/sandbox/
-/data/memory/
+/data/
 
 # IDE
 .vscode/
@@ -34,3 +29,12 @@ Thumbs.db
 # Config
 quasar.toml
 !examples/quasar.example.toml
+
+# Web Screenshots
+packages/web/src/public/screenshots/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+

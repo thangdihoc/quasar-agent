@@ -54,6 +54,21 @@ export class LanceDBMemory {
       await this.table.add([doc])
     }
 
+    // Write to Obsidian-style memories.md markdown file
+    try {
+      const { appendFile, mkdir } = await import('fs/promises')
+      const { join, dirname } = await import('path')
+      const mdPath = join(this.dbPath, '../memory/memories.md')
+      await mkdir(dirname(mdPath), { recursive: true })
+      const timestamp = metadata.timestamp || new Date().toISOString()
+      const category = metadata.category || 'general'
+      const mdContent = `\n## ${timestamp} [${category}]\n- ${text}\n`
+      await appendFile(mdPath, mdContent, 'utf-8')
+      log.info(`Appended memory to Markdown file: ${mdPath}`)
+    } catch (err) {
+      log.error('Failed to append memory to Markdown file:', err)
+    }
+
     log.info(`Added memory: ${id} (${text.slice(0, 50)}...)`)
     return id
   }

@@ -267,8 +267,32 @@ export function createWebServer(
     res.json(getLatestBrowserState() || { url: '', title: '', screenshot: '', elements: [] })
   })
 
+  // --- WebSocket for Nova Mascot ---
+  const novaWss = new WebSocketServer({ noServer: true, permessageDeflate: false })
+  
+  const broadcastNovaState = (state: string, detail?: string) => {
+    const msg = JSON.stringify({ state, detail })
+    novaWss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(msg)
+      }
+    })
+  }
+
+  // Map agent events to Nova states
+  eventBus.on('agent:start', () => broadcastNovaState('thinking', 'Processing request...'))
+  eventBus.on('agent:response', () => broadcastNovaState('idle'))
+  eventBus.on('agent:error', () => broadcastNovaState('idle'))
+  eventBus.on('tool:call', (e) => broadcastNovaState('thinking', `Using tool: ${(e as any).name || 'unknown'}`))
+
+  novaWss.on('connection', (ws) => {
+    log.info('[Nova] Mascot connected')
+    ws.send(JSON.stringify({ state: 'idle' }))
+    ws.on('close', () => log.info('[Nova] Mascot disconnected'))
+  })
+
   // --- WebSocket (#14) ---
-  const wss = new WebSocketServer({ server, path: '/ws' })
+  const wss = new WebSocketServer({ noServer: true, permessageDeflate: false })
 
   // Broadcast events to all connected WS clients for Admin Dashboard (#30)
   const broadcastEvent = (type: string, payload: any) => {
@@ -400,8 +424,32 @@ export function createWebServer(
     res.sendFile(resolve(__dirname, 'public', 'index.html'))
   })
 
+  // Manual routing of WebSocket upgrades to avoid port collisions and protocol compression issues
+  server.on('upgrade', (request, socket, head) => {
+    try {
+      const url = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`)
+      const pathname = url.pathname
+
+      if (pathname === '/nova') {
+        novaWss.handleUpgrade(request, socket, head, (ws) => {
+          novaWss.emit('connection', ws, request)
+        })
+      } else if (pathname === '/ws') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request)
+        })
+      } else {
+        socket.destroy()
+      }
+    } catch (e) {
+      log.error('WebSocket upgrade error:', e)
+      socket.destroy()
+    }
+  })
+
   server.listen(port, host, () => {
     log.info(`WebChat UI: http://${host}:${port}`)
     log.info(`WebSocket: ws://${host}:${port}/ws`)
+    log.info(`Nova Mascot WS: ws://${host}:${port}/nova`)
   })
 }

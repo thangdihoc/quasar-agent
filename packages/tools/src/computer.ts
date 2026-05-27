@@ -12,7 +12,9 @@ export const computerUseDef: ToolDef = {
     type: 'object',
     properties: {
       task: { type: 'string', description: 'The task description for the computer agent (e.g. "open notepad and type hello world")' },
-      maxSteps: { type: 'number', description: 'Max execution steps (default: 20)' }
+      maxSteps: { type: 'number', description: 'Max execution steps (default: 20)' },
+      provider: { type: 'string', description: 'API provider to use (e.g. "anthropic", "google", "openrouter", "openai")' },
+      model: { type: 'string', description: 'Model ID to use (e.g. "claude-3-5-sonnet-latest", "gpt-4o-mini", "gemini-2.5-flash", etc.)' }
     },
     required: ['task']
   }
@@ -22,14 +24,19 @@ export function createComputerUseTool(
   pythonPort = 18790,
   anthropicApiKey?: string,
   googleApiKey?: string,
-  openrouterApiKey?: string
+  openrouterApiKey?: string,
+  openaiApiKey?: string,
+  defaultProvider?: string,
+  defaultModel?: string
 ) {
   return async (args: Record<string, unknown>): Promise<string> => {
     const task = args.task as string
     const maxSteps = (args.maxSteps as number) || 20
+    const provider = (args.provider as string) || defaultProvider
+    const model = (args.model as string) || defaultModel
 
     try {
-      log.info(`Sending computer_use task: "${task}" (maxSteps: ${maxSteps})`)
+      log.info(`Sending computer_use task: "${task}" (maxSteps: ${maxSteps}, provider: ${provider || 'auto'}, model: ${model || 'default'})`)
       const res = await fetch(`http://127.0.0.1:${pythonPort}/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -38,7 +45,10 @@ export function createComputerUseTool(
           max_steps: maxSteps,
           api_key: anthropicApiKey || process.env.ANTHROPIC_API_KEY,
           google_api_key: googleApiKey || process.env.GOOGLE_API_KEY,
-          openrouter_api_key: openrouterApiKey || process.env.OPENROUTER_API_KEY
+          openrouter_api_key: openrouterApiKey || process.env.OPENROUTER_API_KEY,
+          openai_api_key: openaiApiKey || process.env.OPENAI_API_KEY,
+          provider,
+          model
         })
       })
 

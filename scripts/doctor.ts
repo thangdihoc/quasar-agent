@@ -71,12 +71,65 @@ async function runChecks(): Promise<Check[]> {
   // 5. Python (for Computer Use)
   try {
     const { execSync } = await import('child_process')
-    const pyVersion = execSync('python --version 2>&1', { encoding: 'utf-8' }).trim()
+    let pyCmd = 'python'
+    let pyVersion = ''
+    try {
+      pyVersion = execSync('python --version 2>&1', { encoding: 'utf-8' }).trim()
+    } catch {
+      pyCmd = 'python3'
+      pyVersion = execSync('python3 --version 2>&1', { encoding: 'utf-8' }).trim()
+    }
+    
     checks.push({
       name: 'Python',
       status: 'pass',
-      message: `${pyVersion} ✅`,
+      message: `${pyVersion} (using ${pyCmd}) ✅`,
     })
+
+    // If on Linux, check X11 requirements
+    if (process.platform === 'linux') {
+      // 5b. Check scrot
+      try {
+        execSync('command -v scrot', { stdio: 'ignore' })
+        checks.push({
+          name: 'Linux scrot',
+          status: 'pass',
+          message: 'Found ✅',
+        })
+      } catch {
+        checks.push({
+          name: 'Linux scrot',
+          status: 'warn',
+          message: 'Not found ⚠️ (Required for PyAutoGUI screenshots. Install via: sudo apt install scrot)',
+        })
+      }
+
+      // 5c. Check python3-tk
+      try {
+        execSync(`${pyCmd} -c "import tkinter"`, { stdio: 'ignore' })
+        checks.push({
+          name: 'Python Tkinter',
+          status: 'pass',
+          message: 'Found ✅',
+        })
+      } catch {
+        checks.push({
+          name: 'Python Tkinter',
+          status: 'warn',
+          message: 'Not found ⚠️ (Required for PyAutoGUI. Install via: sudo apt install python3-tk)',
+        })
+      }
+
+      // 5d. Check Wayland vs X11
+      const isWayland = process.env.XDG_SESSION_TYPE?.toLowerCase().includes('wayland')
+      checks.push({
+        name: 'Linux Session',
+        status: isWayland ? 'warn' : 'pass',
+        message: isWayland 
+          ? 'Wayland ⚠️ (PyAutoGUI clicks might fail. Switch to Xorg/X11 session at login)'
+          : 'X11 ✅',
+      })
+    }
   } catch {
     checks.push({
       name: 'Python',

@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use quasar_core::{
     Message, MessageRole, QuasarConfig, QuasarError, QuasarResult, SessionId, ToolDef, ProviderName,
-    event_bus, QuasarEvent, with_retry, RetryOptions, CircuitBreaker, ToolCache, tool_cache_key,
+    GLOBAL_EVENT_BUS, event_bus, QuasarEvent, with_retry, RetryOptions, CircuitBreaker, ToolCache, tool_cache_key,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -106,8 +106,12 @@ impl AgentLoop {
                     5,
                     Duration::from_secs(60),
                 )
-            })
-            .clone()
+            });
+        
+        self.circuit_breakers
+            .get(provider_name)
+            .map(|cb| cb.value().clone())
+            .unwrap()
     }
 
     pub async fn process(
@@ -192,7 +196,8 @@ impl AgentLoop {
                         let cache_key = tool_cache_key(&tool_name, &serde_json::from_str(&tool_args).unwrap_or_default());
                         if let Some(cached) = cache.get(&cache_key) {
                             info!("Tool cache hit: {}", tool_name);
-                            return (tool_id, Ok(cached));
+                            let cache_res: Result<String, String> = Ok(cached);
+                            return (tool_id, cache_res);
                         }
 
                         // Execute tool
@@ -221,7 +226,9 @@ impl AgentLoop {
                             success: result.is_ok(),
                         });
 
-                        (tool_id, result)
+                        // Wrap result to match type for join_all/tokio::spawn
+                        let mapped_result: Result<String, String> = result.map_err(|e| e.to_string());
+                        (tool_id, mapped_result)
                     }));
                 }
 
@@ -234,8 +241,8 @@ impl AgentLoop {
                             let truncated = truncate_tool_output(&output, 2000);
                             all_messages.push(Message::tool(truncated, tool_id));
                         }
-                        Ok((tool_id, Err(e))) => {
-                            let error_msg = format!("Tool error: {}", e);
+                        Ok((tool_id, Err(e_str))) => {
+                            let error_msg = format!("Tool error: {}", e_str);
                             error!("{}", error_msg);
                             all_messages.push(Message::tool(error_msg, tool_id));
                         }

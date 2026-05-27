@@ -1,22 +1,21 @@
-// packages/tools/src/exec/powershell.ts
-
 import { createLogger, ToolError } from '@quasar/core'
 import type { ToolDef } from '@quasar/core'
 import { AllowlistManager } from '@quasar/security'
 import { randomUUID } from 'crypto'
 import { spawn } from 'child_process'
+import { platform } from 'os'
 
 const log = createLogger('tools:exec')
 
 export const execDef: ToolDef = {
   name: 'exec',
-  description: 'Execute a PowerShell command on the user\'s Windows machine. Use this for system operations, file management, installing software, etc. Always explain what the command does before running it.',
+  description: 'Execute a terminal/shell command on the user\'s machine. Uses PowerShell on Windows and Bash on macOS/Linux. Use this for system operations, file management, running scripts, installing software, etc. Always explain what the command does before running it.',
   parameters: {
     type: 'object',
     properties: {
       command: {
         type: 'string',
-        description: 'The PowerShell command to execute',
+        description: 'The command to execute (PowerShell format on Windows, Bash on macOS/Linux)',
       },
       timeout: {
         type: 'number',
@@ -53,7 +52,13 @@ export function createExecTool(
       let stdout = ''
       let stderr = ''
 
-      const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      const isWin = platform() === 'win32'
+      const shellCmd = isWin ? 'powershell.exe' : 'bash'
+      const shellArgs = isWin 
+        ? ['-NoProfile', '-NonInteractive', '-Command', command]
+        : ['-c', command]
+
+      const proc = spawn(shellCmd, shellArgs, {
         timeout,
         windowsHide: true,
       })

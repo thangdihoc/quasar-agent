@@ -63,6 +63,19 @@ pub struct CircuitBreaker {
     reset_timeout: Duration,
 }
 
+impl Clone for CircuitBreaker {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            state: Arc::clone(&self.state),
+            failure_count: Arc::clone(&self.failure_count),
+            last_failure_time: Arc::clone(&self.last_failure_time),
+            failure_threshold: self.failure_threshold,
+            reset_timeout: self.reset_timeout,
+        }
+    }
+}
+
 impl CircuitBreaker {
     pub fn new(name: impl Into<String>, failure_threshold: usize, reset_timeout: Duration) -> Self {
         Self {
@@ -79,7 +92,7 @@ impl CircuitBreaker {
         *self.state.read()
     }
 
-    fn check_state(&self) {
+    pub fn check_state(&self) {
         let mut state = self.state.write();
         if *state == CircuitState::Open {
             if let Some(last_failure) = *self.last_failure_time.read() {

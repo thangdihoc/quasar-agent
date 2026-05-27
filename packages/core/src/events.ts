@@ -17,6 +17,9 @@ export type QuasarEvent =
   | { type: 'token:usage'; sessionId: string; promptTokens: number; completionTokens: number; totalTokens: number; model: string }
   | { type: 'circuit:state'; provider: string; state: string }
   | { type: 'browser:update'; url: string; title: string; screenshot: string; elements: Array<{ refId: string; tag: string; text: string; type?: string; placeholder?: string }> }
+  | { type: 'heartbeat:tick'; timestamp: number }
+  | { type: 'heartbeat:result'; message: string; checks: string[] }
+  | { type: 'heartbeat:skip'; reason: 'quiet_hours' | 'no_checklist' | 'disabled' }
 
 class QuasarEventBus extends EventEmitter {
   emit(event: QuasarEvent['type'], data: QuasarEvent): boolean {

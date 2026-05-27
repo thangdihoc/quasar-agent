@@ -46,7 +46,7 @@ impl OpenAIProvider {
             }
             MessageRole::Assistant => {
                 ChatCompletionRequestMessage::Assistant(ChatCompletionRequestAssistantMessage {
-                    content: Some(msg.content.clone()),
+                    content: Some(async_openai::types::ChatCompletionRequestAssistantMessageContent::Text(msg.content.clone())),
                     tool_calls: msg.tool_calls.as_ref().map(|calls| {
                         calls
                             .iter()

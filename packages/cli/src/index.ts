@@ -15,7 +15,7 @@ import { loadSkills, skillsToPrompt } from '@quasar/skills'
 import { ImageService, TTSService } from '@quasar/media'
 import { mkdir } from 'fs/promises'
 import { resolve } from 'path'
-import { spawn } from 'child_process'
+import { spawn, execSync } from 'child_process'
 import OpenAI from 'openai'
 
 const log = createLogger('cli')
@@ -104,6 +104,8 @@ function getConfig(): QuasarConfig {
     computerUse: {
       enabled: process.env.COMPUTER_USE_ENABLED === 'true' || true,
       pythonPort: 18790,
+      provider: undefined,
+      model: undefined,
     },
     mcp: {
       servers: [],
@@ -176,6 +178,18 @@ async function start() {
 
   // Init Agent loop (with vectorMemory)
   const agentLoop = new AgentLoop(config, memory, vectorMemory)
+
+  // Start SyncManager for Context Sync
+  let syncManager: any = null
+  if (vectorMemory) {
+    try {
+      const { SyncManager } = await import('@quasar/tools')
+      syncManager = new SyncManager(vectorMemory, resolve('./data/sync'))
+      syncManager.start()
+    } catch (e) {
+      log.error('Failed to start SyncManager:', e)
+    }
+  }
 
   // Init services
   const imageService = openAiApiKey ? new ImageService(openAiApiKey) : undefined
@@ -254,7 +268,20 @@ async function start() {
   if (config.computerUse?.enabled) {
     const pythonPort = config.computerUse.pythonPort || 18790
     log.info(`Starting Python Computer Use service on port ${pythonPort}...`)
-    const pyCmd = process.platform === 'win32' ? 'python' : 'python3'
+    
+    // Detect python vs python3 dynamically
+    let pyCmd = 'python'
+    try {
+      execSync('python --version', { stdio: 'ignore' })
+    } catch {
+      try {
+        execSync('python3 --version', { stdio: 'ignore' })
+        pyCmd = 'python3'
+      } catch {
+        log.warn('Neither "python" nor "python3" was found on PATH. Defaulting to "python".')
+      }
+    }
+
     pythonProcess = spawn(pyCmd, ['modules/computer-use/main.py'], {
       stdio: 'inherit',
       env: { ...process.env, PORT: String(pythonPort) }
@@ -284,10 +311,37 @@ async function start() {
     log.error('Failed to start WebChat server:', err)
   }
 
+  // Spawn Tauri Desktop Mascot & Chat UI
+  let tauriProcess: any = null
+  if (process.env.START_DESKTOP !== 'false') {
+    log.info('Starting Tauri Desktop application (Mascot & Chat UI)...')
+    const isWindows = process.platform === 'win32'
+    const cmd = isWindows ? 'cmd.exe' : 'pnpm'
+    const args = isWindows 
+      ? ['/c', 'pnpm', '--filter', '@quasar/nova', 'dev']
+      : ['--filter', '@quasar/nova', 'dev']
+
+    tauriProcess = spawn(cmd, args, {
+      stdio: 'inherit',
+      env: { ...process.env }
+    })
+
+    tauriProcess.on('error', (err: any) => {
+      log.error('Failed to start Tauri desktop application:', err)
+    })
+  }
+
   // Graceful shutdown
   const shutdown = async () => {
     log.info('Shutting down...')
     
+    // Stop SyncManager
+    if (syncManager) {
+      try {
+        syncManager.stop()
+      } catch { /* ignore */ }
+    }
+
     // Stop Telegram bot
     try {
       await bot.stop()
@@ -308,6 +362,14 @@ async function start() {
       log.info('Stopping Python computer-use service...')
       try {
         pythonProcess.kill()
+      } catch { /* ignore */ }
+    }
+
+    // Terminate Tauri desktop app
+    if (tauriProcess) {
+      log.info('Stopping Tauri desktop application...')
+      try {
+        tauriProcess.kill()
       } catch { /* ignore */ }
     }
 

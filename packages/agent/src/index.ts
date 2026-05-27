@@ -11,3 +11,6 @@ export {
 export type { IProvider } from './providers/index.js'
 export type { CompletionOptions, CompletionResult } from './providers/openai.js'
 export { delegateTaskDef, listAgentsDef, createDelegationTools, SUB_AGENTS, type SubAgentProfile } from './delegation.js'
+export { HeartbeatEngine, getDefaultHeartbeatConfig, type HeartbeatState, type HeartbeatResult } from './heartbeat.js'
+export { ChatEtiquette, getDefaultEtiquetteConfig, type ChatContext, type EtiquetteDecision } from './chat-etiquette.js'
+

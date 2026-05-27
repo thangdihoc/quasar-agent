@@ -89,6 +89,10 @@ pub struct McpConfig {
 pub struct ComputerUseConfig {
     pub enabled: bool,
     pub python_port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl Default for ComputerUseConfig {
@@ -96,11 +100,13 @@ impl Default for ComputerUseConfig {
         Self {
             enabled: false,
             python_port: 18790,
+            provider: None,
+            model: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WebConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,

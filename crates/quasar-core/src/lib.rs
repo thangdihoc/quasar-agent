@@ -14,9 +14,9 @@ pub use types::{
     tool::{Tool, ToolDef, ToolParameter},
     session::{Session, SessionId},
     agent::{AgentConfig, ProviderName},
-    config::QuasarConfig,
+    config::{QuasarConfig, GatewayConfig, TelegramConfig, ToolsConfig, MemoryConfig, McpConfig, McpServerConfig, ComputerUseConfig, WebConfig},
 };
 pub use logger::{init_logger, LogLevel};
-pub use events::{EventBus, QuasarEvent};
-pub use cache::{TtlCache, ToolCache};
+pub use events::{EventBus, QuasarEvent, GLOBAL_EVENT_BUS, event_bus};
+pub use cache::{TtlCache, ToolCache, tool_cache_key};
 pub use retry::{RetryOptions, CircuitBreaker, with_retry};

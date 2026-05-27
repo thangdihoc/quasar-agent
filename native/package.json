@@ -2,17 +2,17 @@
   "name": "@quasar/native",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "main": "index.js",
+  "types": "index.d.ts",
   "napi": {
     "name": "quasar-native",
     "triples": {
-      "defaults": true
+      "defaults": true,
+      "additional": []
     }
   },
   "scripts": {
-    "build": "napi build --release",
-    "build:debug": "napi build"
+    "build": "napi build --platform --release"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.0"

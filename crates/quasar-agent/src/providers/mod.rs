@@ -46,14 +46,14 @@ impl ProviderFactory {
                 let api_key = config
                     .providers
                     .get("openai")
-                    .and_then(|p| p.api_key.as_ref())
-                    .or_else(|| std::env::var("OPENAI_API_KEY").ok().as_ref())
+                    .and_then(|p| p.api_key.clone())
+                    .or_else(|| std::env::var("OPENAI_API_KEY").ok())
                     .ok_or_else(|| quasar_core::QuasarError::config("OPENAI_API_KEY not configured"))?;
                 
                 let base_url = config
                     .providers
                     .get("openai")
-                    .and_then(|p| p.base_url.as_ref());
+                    .and_then(|p| p.base_url.clone());
 
                 Ok(Box::new(openai::OpenAIProvider::new(api_key, base_url)?))
             }
@@ -61,8 +61,8 @@ impl ProviderFactory {
                 let api_key = config
                     .providers
                     .get("anthropic")
-                    .and_then(|p| p.api_key.as_ref())
-                    .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok().as_ref())
+                    .and_then(|p| p.api_key.clone())
+                    .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
                     .ok_or_else(|| quasar_core::QuasarError::config("ANTHROPIC_API_KEY not configured"))?;
 
                 Ok(Box::new(anthropic::AnthropicProvider::new(api_key)?))
@@ -71,8 +71,8 @@ impl ProviderFactory {
                 let api_key = config
                     .providers
                     .get("google")
-                    .and_then(|p| p.api_key.as_ref())
-                    .or_else(|| std::env::var("GOOGLE_API_KEY").ok().as_ref())
+                    .and_then(|p| p.api_key.clone())
+                    .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
                     .ok_or_else(|| quasar_core::QuasarError::config("GOOGLE_API_KEY not configured"))?;
 
                 Ok(Box::new(google::GoogleProvider::new(api_key)?))
@@ -81,8 +81,8 @@ impl ProviderFactory {
                 let api_key = config
                     .providers
                     .get("openrouter")
-                    .and_then(|p| p.api_key.as_ref())
-                    .or_else(|| std::env::var("OPENROUTER_API_KEY").ok().as_ref())
+                    .and_then(|p| p.api_key.clone())
+                    .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
                     .ok_or_else(|| quasar_core::QuasarError::config("OPENROUTER_API_KEY not configured"))?;
 
                 let base_url = Some("https://openrouter.ai/api/v1");
@@ -92,12 +92,11 @@ impl ProviderFactory {
                 let base_url = config
                     .providers
                     .get("ollama")
-                    .and_then(|p| p.base_url.as_ref())
-                    .map(|s| s.as_str())
-                    .or_else(|| std::env::var("OLLAMA_BASE_URL").ok().as_deref())
-                    .or(Some("http://localhost:11434/v1"));
+                    .and_then(|p| p.base_url.clone())
+                    .or_else(|| std::env::var("OLLAMA_BASE_URL").ok())
+                    .unwrap_or_else(|| "http://localhost:11434/v1".to_string());
 
-                Ok(Box::new(openai::OpenAIProvider::new("ollama", base_url)?))
+                Ok(Box::new(openai::OpenAIProvider::new("ollama", Some(base_url))?))
             }
         }
     }

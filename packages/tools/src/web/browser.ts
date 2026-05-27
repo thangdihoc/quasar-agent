@@ -7,6 +7,8 @@ import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createLogger, eventBus } from '@quasar/core'
 import type { ToolDef } from '@quasar/core'
+import { AllowlistManager } from '@quasar/security'
+import { randomUUID } from 'crypto'
 
 const log = createLogger('tools:web:browser')
 
@@ -48,21 +50,18 @@ function resolveSelector(selector: string): string {
 
 async function markInteractiveElements(page: Page): Promise<void> {
   try {
-    await page.evaluate(() => {
-      // First, clear any existing data-quasar-ref attributes to avoid duplicates
-      const existing = document.querySelectorAll('[data-quasar-ref]')
-      existing.forEach(el => el.removeAttribute('data-quasar-ref'))
+    await page.evaluate(`() => {
+      const existing = document.querySelectorAll('[data-quasar-ref]');
+      existing.forEach(el => el.removeAttribute('data-quasar-ref'));
 
-      // Helper to check if element is visible
-      const isVisible = (el: HTMLElement) => {
-        if (!el) return false
-        const style = window.getComputedStyle(el)
-        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false
-        const rect = el.getBoundingClientRect()
-        return rect.width > 0 && rect.height > 0
-      }
+      const isVisible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
 
-      // Select interactive elements
       const interactiveSelectors = [
         'a',
         'button',
@@ -75,16 +74,16 @@ async function markInteractiveElements(page: Page): Promise<void> {
         '[role="menuitem"]',
         '[onclick]',
         '.clickable'
-      ].join(',')
+      ].join(',');
 
-      const all = Array.from(document.querySelectorAll(interactiveSelectors)) as HTMLElement[]
-      let refId = 1
+      const all = Array.from(document.querySelectorAll(interactiveSelectors));
+      let refId = 1;
       for (const el of all) {
         if (isVisible(el)) {
-          el.setAttribute('data-quasar-ref', String(refId++))
+          el.setAttribute('data-quasar-ref', String(refId++));
         }
       }
-    })
+    }`);
   } catch (e) {
     log.error('Failed to mark interactive elements:', e)
   }
@@ -94,20 +93,20 @@ async function updateBrowserState(page: Page): Promise<void> {
   try {
     await markInteractiveElements(page)
 
-    const elements = await page.evaluate(() => {
-      const els = Array.from(document.querySelectorAll('[data-quasar-ref]')) as HTMLElement[]
+    const elements = await page.evaluate(`() => {
+      const els = Array.from(document.querySelectorAll('[data-quasar-ref]'));
       return els.map(el => {
-        const refId = el.getAttribute('data-quasar-ref') || ''
-        const tag = el.tagName.toLowerCase()
-        let text = el.innerText?.trim() || ''
+        const refId = el.getAttribute('data-quasar-ref') || '';
+        const tag = el.tagName.toLowerCase();
+        let text = el.innerText?.trim() || '';
         if (!text && tag === 'input') {
-          text = (el as HTMLInputElement).value || ''
+          text = el.value || '';
         }
-        const type = el.getAttribute('type') || undefined
-        const placeholder = el.getAttribute('placeholder') || undefined
-        return { refId, tag, text: text.slice(0, 50), type, placeholder }
-      })
-    })
+        const type = el.getAttribute('type') || undefined;
+        const placeholder = el.getAttribute('placeholder') || undefined;
+        return { refId, tag, text: text.slice(0, 50), type, placeholder };
+      });
+    }`) as any;
 
     const screenshot = await takeScreenshot(page)
 
@@ -167,14 +166,27 @@ export const webBrowserDef: ToolDef = {
   }
 }
 
-async function getOrCreateBrowser(headless = false): Promise<Page> {
-  if (browserInstance && contextInstance && pageInstance) {
-    if (!browserInstance.isConnected() || pageInstance.isClosed()) {
-      log.info('Browser or page is closed, re-initializing...')
+async function getOrCreateBrowser(headless = false, usePersonalProfile = false): Promise<Page> {
+  if (contextInstance && pageInstance) {
+    if (pageInstance.isClosed()) {
+      log.info('Page is closed, re-initializing...')
       await cleanup()
     } else {
       return pageInstance
     }
+  }
+
+  if (usePersonalProfile) {
+    const profilePath = resolve('./data/chrome-profile')
+    log.info(`Launching Playwright Chromium with persistent personal profile at ${profilePath}...`)
+    contextInstance = await chromium.launchPersistentContext(profilePath, {
+      headless: false, // Personal profile should be headed so user can interact/login
+      viewport: { width: 1280, height: 800 },
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    })
+    const pages = contextInstance.pages()
+    pageInstance = pages.length > 0 ? pages[0]! : await contextInstance.newPage()
+    return pageInstance
   }
 
   log.info(`Launching Playwright Chromium (headless: ${headless})...`)
@@ -198,6 +210,9 @@ async function getOrCreateBrowser(headless = false): Promise<Page> {
 async function cleanup() {
   try {
     if (pageInstance && !pageInstance.isClosed()) await pageInstance.close()
+  } catch {}
+  try {
+    if (contextInstance) await contextInstance.close()
   } catch {}
   try {
     if (browserInstance) await browserInstance.close()
@@ -356,198 +371,220 @@ function cleanHtmlToMarkdown(html: string, baseUrl: string): string {
   return cleanedLines.join('\n').trim()
 }
 
-export async function webBrowser(args: Record<string, unknown>): Promise<string> {
-  const action = args.action as string
-  const headless = args.headless !== false // Default is headless: true for background, but allow headless: false in definition
+export function createWebBrowserTool(
+  allowlist?: AllowlistManager,
+  onApprovalNeeded?: (id: string, message: string) => Promise<void>
+) {
+  return async (args: Record<string, unknown>): Promise<string> => {
+    const action = args.action as string
+    const headless = args.headless !== false // Default is headless: true for background, but allow headless: false in definition
 
-  try {
-    if (action === 'close') {
-      await cleanup()
-      latestBrowserState = null
-      eventBus.emit('browser:update', {
-        type: 'browser:update',
-        url: '',
-        title: '',
-        screenshot: '',
-        elements: []
-      })
-      return 'Browser closed successfully.'
-    }
+    try {
+      if (action === 'close') {
+        await cleanup()
+        latestBrowserState = null
+        eventBus.emit('browser:update', {
+          type: 'browser:update',
+          url: '',
+          title: '',
+          screenshot: '',
+          elements: []
+        })
+        return 'Browser closed successfully.'
+      }
 
-    // Launch or retrieve page
-    const page = await getOrCreateBrowser(headless)
+      // Launch or retrieve page
+      let usePersonalProfile = false
+      if (!contextInstance || !pageInstance || pageInstance.isClosed()) {
+        if (allowlist && onApprovalNeeded) {
+          const approvalId = randomUUID()
+          const promptMsg = "Sử dụng tài khoản Chrome cá nhân (Keep logins, cookies)?"
+          await onApprovalNeeded(approvalId, promptMsg)
+          log.info(`Requesting Chrome profile approval (ID: ${approvalId})...`)
+          const approved = await allowlist.requestApproval(approvalId, promptMsg, 20_000)
+          if (approved) {
+            usePersonalProfile = true
+            log.info('User approved using personal Chrome profile.')
+          } else {
+            log.info('User denied or timed out. Falling back to incognito.')
+          }
+        }
+      }
 
-    if (action === 'navigate') {
-      const url = args.url as string
-      if (!url) return 'Error: url is required for navigate action.'
-      
-      log.info(`Navigating to: ${url}`)
-      await page.goto(url, { waitUntil: 'domcontentloaded' })
-      await page.waitForTimeout(1000) // Wait brief moment for dynamic contents
+      const page = await getOrCreateBrowser(headless, usePersonalProfile)
 
-      await updateBrowserState(page)
+      if (action === 'navigate') {
+        const url = args.url as string
+        if (!url) return 'Error: url is required for navigate action.'
+        
+        log.info(`Navigating to: ${url}`)
+        await page.goto(url, { waitUntil: 'domcontentloaded' })
+        await page.waitForTimeout(1000) // Wait brief moment for dynamic contents
 
-      const html = await page.content()
-      const title = await page.title()
-      const currentUrl = page.url()
-      const markdown = cleanHtmlToMarkdown(html, currentUrl)
-      const screenshot = latestBrowserState?.screenshot || ''
+        await updateBrowserState(page)
 
-      return `Successfully loaded page.
+        const html = await page.content()
+        const title = await page.title()
+        const currentUrl = page.url()
+        const markdown = cleanHtmlToMarkdown(html, currentUrl)
+        const screenshot = latestBrowserState?.screenshot || ''
+
+        return `Successfully loaded page.
 URL: ${currentUrl}
 Title: ${title}
 Screenshot: ${screenshot}
 
 --- Content (TokenJuice Compressed) ---
 ${markdown}`
-    }
+      }
 
-    if (action === 'click') {
-      let selector = args.selector as string
-      if (!selector) return 'Error: selector is required for click action.'
+      if (action === 'click') {
+        let selector = args.selector as string
+        if (!selector) return 'Error: selector is required for click action.'
 
-      selector = resolveSelector(selector)
-      log.info(`Clicking element: ${selector}`)
-      
-      // Try resolving by text if CSS selector fails
-      if (!selector.startsWith('/') && !selector.startsWith('.') && !selector.startsWith('#') && !selector.includes('=') && !selector.startsWith('[')) {
-        // Try finding by text
-        try {
-          await page.click(`text="${selector}"`, { timeout: 4000 })
-        } catch {
+        selector = resolveSelector(selector)
+        log.info(`Clicking element: ${selector}`)
+        
+        // Try resolving by text if CSS selector fails
+        if (!selector.startsWith('/') && !selector.startsWith('.') && !selector.startsWith('#') && !selector.includes('=') && !selector.startsWith('[')) {
+          // Try finding by text
+          try {
+            await page.click(`text="${selector}"`, { timeout: 4000 })
+          } catch {
+            await page.click(selector)
+          }
+        } else {
           await page.click(selector)
         }
-      } else {
-        await page.click(selector)
+
+        await page.waitForTimeout(1500) // Wait for render/navigation
+        await updateBrowserState(page)
+
+        const html = await page.content()
+        const title = await page.title()
+        const currentUrl = page.url()
+        const markdown = cleanHtmlToMarkdown(html, currentUrl)
+        const screenshot = latestBrowserState?.screenshot || ''
+
+        return `Successfully clicked.
+URL: ${currentUrl}
+Title: ${title}
+Screenshot: ${screenshot}
+
+--- Content (TokenJuice Compressed) ---
+${markdown}`
       }
 
-      await page.waitForTimeout(1500) // Wait for render/navigation
-      await updateBrowserState(page)
+      if (action === 'type') {
+        let selector = args.selector as string
+        const text = args.text as string
+        if (!selector) return 'Error: selector is required for type action.'
+        if (text === undefined) return 'Error: text is required for type action.'
 
-      const html = await page.content()
-      const title = await page.title()
-      const currentUrl = page.url()
-      const markdown = cleanHtmlToMarkdown(html, currentUrl)
-      const screenshot = latestBrowserState?.screenshot || ''
+        selector = resolveSelector(selector)
+        log.info(`Typing "${text}" into: ${selector}`)
+        await page.fill(selector, text)
+        // Press Enter in case it's a search field
+        try {
+          await page.press(selector, 'Enter')
+        } catch {}
 
-      return `Successfully clicked.
+        await page.waitForTimeout(1500)
+        await updateBrowserState(page)
+
+        const html = await page.content()
+        const title = await page.title()
+        const currentUrl = page.url()
+        const markdown = cleanHtmlToMarkdown(html, currentUrl)
+        const screenshot = latestBrowserState?.screenshot || ''
+
+        return `Successfully typed and submitted.
 URL: ${currentUrl}
 Title: ${title}
 Screenshot: ${screenshot}
 
 --- Content (TokenJuice Compressed) ---
 ${markdown}`
-    }
-
-    if (action === 'type') {
-      let selector = args.selector as string
-      const text = args.text as string
-      if (!selector) return 'Error: selector is required for type action.'
-      if (text === undefined) return 'Error: text is required for type action.'
-
-      selector = resolveSelector(selector)
-      log.info(`Typing "${text}" into: ${selector}`)
-      await page.fill(selector, text)
-      // Press Enter in case it's a search field
-      try {
-        await page.press(selector, 'Enter')
-      } catch {}
-
-      await page.waitForTimeout(1500)
-      await updateBrowserState(page)
-
-      const html = await page.content()
-      const title = await page.title()
-      const currentUrl = page.url()
-      const markdown = cleanHtmlToMarkdown(html, currentUrl)
-      const screenshot = latestBrowserState?.screenshot || ''
-
-      return `Successfully typed and submitted.
-URL: ${currentUrl}
-Title: ${title}
-Screenshot: ${screenshot}
-
---- Content (TokenJuice Compressed) ---
-${markdown}`
-    }
-
-    if (action === 'scroll') {
-      const direction = (args.direction as string) || 'down'
-      log.info(`Scrolling: ${direction}`)
-      
-      if (direction === 'down') {
-        await page.evaluate(() => (globalThis as any).scrollBy(0, 600))
-      } else {
-        await page.evaluate(() => (globalThis as any).scrollBy(0, -600))
       }
 
-      await page.waitForTimeout(500)
-      await updateBrowserState(page)
+      if (action === 'scroll') {
+        const direction = (args.direction as string) || 'down'
+        log.info(`Scrolling: ${direction}`)
+        
+        if (direction === 'down') {
+          await page.evaluate(() => (globalThis as any).scrollBy(0, 600))
+        } else {
+          await page.evaluate(() => (globalThis as any).scrollBy(0, -600))
+        }
 
-      const html = await page.content()
-      const currentUrl = page.url()
-      const markdown = cleanHtmlToMarkdown(html, currentUrl)
-      const screenshot = latestBrowserState?.screenshot || ''
+        await page.waitForTimeout(500)
+        await updateBrowserState(page)
 
-      return `Successfully scrolled ${direction}.
+        const html = await page.content()
+        const currentUrl = page.url()
+        const markdown = cleanHtmlToMarkdown(html, currentUrl)
+        const screenshot = latestBrowserState?.screenshot || ''
+
+        return `Successfully scrolled ${direction}.
 Screenshot: ${screenshot}
 
 --- Content (TokenJuice Compressed) ---
 ${markdown}`
-    }
+      }
 
-    if (action === 'hover') {
-      let selector = args.selector as string
-      if (!selector) return 'Error: selector is required for hover action.'
+      if (action === 'hover') {
+        let selector = args.selector as string
+        if (!selector) return 'Error: selector is required for hover action.'
 
-      selector = resolveSelector(selector)
-      log.info(`Hovering: ${selector}`)
-      await page.hover(selector)
-      await updateBrowserState(page)
-      const screenshot = latestBrowserState?.screenshot || ''
-      return `Successfully hovered over ${selector}. Screenshot: ${screenshot}`
-    }
+        selector = resolveSelector(selector)
+        log.info(`Hovering: ${selector}`)
+        await page.hover(selector)
+        await updateBrowserState(page)
+        const screenshot = latestBrowserState?.screenshot || ''
+        return `Successfully hovered over ${selector}. Screenshot: ${screenshot}`
+      }
 
-    if (action === 'back') {
-      log.info('Going back in history')
-      await page.goBack({ waitUntil: 'domcontentloaded' })
-      await updateBrowserState(page)
+      if (action === 'back') {
+        log.info('Going back in history')
+        await page.goBack({ waitUntil: 'domcontentloaded' })
+        await updateBrowserState(page)
 
-      const html = await page.content()
-      const title = await page.title()
-      const currentUrl = page.url()
-      const markdown = cleanHtmlToMarkdown(html, currentUrl)
-      const screenshot = latestBrowserState?.screenshot || ''
+        const html = await page.content()
+        const title = await page.title()
+        const currentUrl = page.url()
+        const markdown = cleanHtmlToMarkdown(html, currentUrl)
+        const screenshot = latestBrowserState?.screenshot || ''
 
-      return `Successfully navigated back.
+        return `Successfully navigated back.
 URL: ${currentUrl}
 Title: ${title}
 Screenshot: ${screenshot}
 
 --- Content (TokenJuice Compressed) ---
 ${markdown}`
-    }
+      }
 
-    if (action === 'screenshot') {
-      const screenshot = await takeScreenshot(page)
-      return `Screenshot captured: ${screenshot}`
-    }
+      if (action === 'screenshot') {
+        const screenshot = await takeScreenshot(page)
+        return `Screenshot captured: ${screenshot}`
+      }
 
-    if (action === 'get_html') {
-      const html = await page.content()
-      return html
-    }
+      if (action === 'get_html') {
+        const html = await page.content()
+        return html
+      }
 
-    if (action === 'get_text') {
-      const html = await page.content()
-      const currentUrl = page.url()
-      const markdown = cleanHtmlToMarkdown(html, currentUrl)
-      return markdown
-    }
+      if (action === 'get_text') {
+        const html = await page.content()
+        const currentUrl = page.url()
+        const markdown = cleanHtmlToMarkdown(html, currentUrl)
+        return markdown
+      }
 
-    return `Error: Unknown action "${action}".`
-  } catch (e) {
-    log.error(`webBrowser error during ${action}:`, e)
-    return `Error executing browser action "${action}": ${e instanceof Error ? e.message : String(e)}`
+      return `Error: Unknown action "${action}".`
+    } catch (e) {
+      log.error(`webBrowser error during ${action}:`, e)
+      return `Error executing browser action "${action}": ${e instanceof Error ? e.message : String(e)}`
+    }
   }
 }

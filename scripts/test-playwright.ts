@@ -1,10 +1,12 @@
 // scripts/test-playwright.ts
 // Test script for Playwright Browser Tool and TokenJuice compression
 
-import { webBrowser } from '../packages/tools/src/web/browser.js'
+import { createWebBrowserTool } from '../packages/tools/src/web/browser.js'
 
 async function runTest() {
   console.log('🚀 Starting Playwright Browser Tool test...')
+
+  const webBrowser = createWebBrowserTool()
 
   // Test 1: Navigation to Hacker News in headed or headless mode
   // Using headless: true for automated script running

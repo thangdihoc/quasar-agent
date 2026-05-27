@@ -13,7 +13,7 @@ import { fileReadDef, fileRead } from './fs/read.js'
 import { fileWriteDef, fileWrite, fileEditDef, fileEdit, fileListDef, fileList } from './fs/write.js'
 import { webFetchDef, webFetch } from './web/fetch.js'
 import { webSearchDef, webSearch } from './web/search.js'
-import { webBrowserDef, webBrowser } from './web/browser.js'
+import { webBrowserDef, createWebBrowserTool } from './web/browser.js'
 import { pdfReadDef, pdfRead } from './pdf.js'
 
 // Import new tools
@@ -21,6 +21,7 @@ import { generateImageDef, createGenerateImageTool, textToSpeechDef, createTTSTo
 import { scheduleTaskDef, createScheduleTaskTool, cancelTaskDef, createCancelTaskTool } from './scheduler.js'
 import { computerUseDef, createComputerUseTool } from './computer.js'
 import { rememberInfoDef, createRememberInfoTool, searchMemoriesDef, createSearchMemoriesTool } from './memory.js'
+import { updateUserProfileDef, createUpdateUserProfileTool } from './profile.js'
 import { createPlanDef, updatePlanDef, getPlanDef, createPlanningTools } from './planning.js'
 import { runCodeDef, createRunCodeTool } from './sandbox.js'
 import { defineWorkflowDef, runWorkflowDef, listWorkflowsDef, createWorkflowTools } from './workflow.js'
@@ -66,7 +67,9 @@ export function registerAllTools(opts: RegistryOptions): void {
   // Web tools
   if (shouldRegister('web_fetch')) agent.registerTool(webFetchDef, webFetch)
   if (shouldRegister('web_search')) agent.registerTool(webSearchDef, webSearch)
-  if (shouldRegister('web_browser')) agent.registerTool(webBrowserDef, webBrowser)
+  if (shouldRegister('web_browser')) {
+    agent.registerTool(webBrowserDef, createWebBrowserTool(allowlist, onApprovalNeeded))
+  }
 
   // PDF
   if (shouldRegister('pdf_read')) agent.registerTool(pdfReadDef, pdfRead)
@@ -93,9 +96,20 @@ export function registerAllTools(opts: RegistryOptions): void {
     const anthropicKey = config.providers.anthropic?.apiKey
     const googleKey = config.providers.google?.apiKey
     const openrouterKey = config.providers.openrouter?.apiKey
+    const openaiKey = config.providers.openai?.apiKey
+    const defaultProvider = config.computerUse?.provider
+    const defaultModel = config.computerUse?.model
     agent.registerTool(
       computerUseDef,
-      createComputerUseTool(pythonPort, anthropicKey, googleKey, openrouterKey)
+      createComputerUseTool(
+        pythonPort,
+        anthropicKey,
+        googleKey,
+        openrouterKey,
+        openaiKey,
+        defaultProvider,
+        defaultModel
+      )
     )
   }
 
@@ -105,6 +119,11 @@ export function registerAllTools(opts: RegistryOptions): void {
   }
   if (shouldRegister('search_memories')) {
     agent.registerTool(searchMemoriesDef, createSearchMemoriesTool(vectorMemory))
+  }
+
+  // User Profile
+  if (shouldRegister('update_user_profile')) {
+    agent.registerTool(updateUserProfileDef, createUpdateUserProfileTool())
   }
 
   // Planning (#13)

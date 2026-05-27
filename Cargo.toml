@@ -7,7 +7,7 @@ members = [
     "crates/quasar-mcp",
     "crates/quasar-cli",
     "native",
-    "packages/nova/src-tauri",
+    "packages/desktop/src-tauri",
 ]
 resolver = "2"
 

@@ -318,8 +318,8 @@ async function start() {
     const isWindows = process.platform === 'win32'
     const cmd = isWindows ? 'cmd.exe' : 'pnpm'
     const args = isWindows 
-      ? ['/c', 'pnpm', '--filter', '@quasar/nova', 'dev']
-      : ['--filter', '@quasar/nova', 'dev']
+      ? ['/c', 'pnpm', '--filter', '@quasar/desktop', 'dev']
+      : ['--filter', '@quasar/desktop', 'dev']
 
     tauriProcess = spawn(cmd, args, {
       stdio: 'inherit',

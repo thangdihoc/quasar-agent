@@ -2,7 +2,7 @@
 
 ## Tổng quan
 
-Dự án đang được chuyển đổi từ TypeScript sang Rust để cải thiện hiệu năng, giảm memory footprint, và tăng độ tin cậy.
+Rust giờ là lõi chính của Quasar. Legacy TypeScript và Python sources đã được tách vào `legacy/` và không còn là phần của runtime chính.
 
 ## Cấu trúc Rust Workspace
 
@@ -70,14 +70,17 @@ quasar-agent/
 ### 🚧 Đang thực hiện
 
 - **quasar-memory**: SQLite + LanceDB integration
-- **quasar-tools**: Tool registry và implementations
+- **quasar-tools**: Tool registry và implementations (basic file/web/exec tool support today)
 - **quasar-mcp**: MCP client
-- **quasar-cli**: CLI interface
+- **quasar-cli**: CLI interface (now functional with setup/model commands)
+
+### 📋 Đang tiến triển
+
+- Anthropic provider (partial/stub present)
+- Google provider (partial/stub present)
 
 ### 📋 Chưa bắt đầu
 
-- Anthropic provider (full implementation)
-- Google provider (full implementation)
 - Telegram bot integration
 - Web server (gateway)
 - Computer Use integration
@@ -136,7 +139,7 @@ clap = "4.5"                # CLI
 cargo build --release
 
 # Run CLI
-cargo run --bin quasar-cli -- start
+cargo run --bin quasar -- start
 
 # Run tests
 cargo test
@@ -173,8 +176,9 @@ cargo check --workspace
 ## Notes
 
 - Native module (`native/`) vẫn được giữ lại cho NAPI-RS bindings
-- TypeScript code (`packages/`) được giữ làm reference
-- Rust version sẽ dần thay thế TypeScript version
+- TypeScript code (`packages/`) được giữ làm reference và hỗ trợ UI/bot/orchestration
+- Python code (`modules/computer-use/`) chỉ dùng cho automation/Computer Use
+- Rust là lõi runtime chính, TS/Python là tầng phụ trợ
 - Có thể chạy song song trong quá trình migration
 
 ## Roadmap
